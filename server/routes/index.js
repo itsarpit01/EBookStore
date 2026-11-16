@@ -7,6 +7,7 @@ import userRoutes from "./userRoutes.js";
 import purchaseRequestRoutes from "./purchaseRequestRoutes.js";
 import dashboardRoutes from "./dashboardRoutes.js";
 import paymentRoutes from "./paymentRoutes.js";
+import ticketRoutes from "./ticketRoutes.js";
 import notificationRoutes from "./notificationRoutes.js";
 
 const router = express.Router();
@@ -14,6 +15,7 @@ const router = express.Router();
 // Public routes (Auth & Razorpay Webhook)
 router.use("/auth", authRoutes);
 router.use("/payment", paymentRoutes);
+router.use("/tickets", ticketRoutes);
 
 // Protected routes
 router.use(protect);
