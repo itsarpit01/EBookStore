@@ -2,14 +2,27 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../api/axios";
 import { BellIcon } from "./Icons";
+import { playNotificationSound, unlockAudio } from "../utils/sound";
 
 export default function NotificationBell() {
   const navigate = useNavigate();
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [isOpen, setIsOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
   const dropdownRef = useRef(null);
+
+  // Track initial load so sound only plays on newly arriving notifications
+  const isInitialLoad = useRef(true);
+
+  // Unlock audio on first user click to satisfy browser autoplay policies
+  useEffect(() => {
+    const handleFirstClick = () => {
+      unlockAudio();
+      window.removeEventListener("click", handleFirstClick);
+    };
+    window.addEventListener("click", handleFirstClick, { once: true });
+    return () => window.removeEventListener("click", handleFirstClick);
+  }, []);
 
   useEffect(() => {
     if ("Notification" in window && Notification.permission === "default") {
@@ -22,6 +35,11 @@ export default function NotificationBell() {
       const res = await api.get("/notifications");
       setNotifications(res.data.notifications || []);
       const newUnread = res.data.unreadCount || 0;
+
+      // Play alert sound when new notification arrives (skip initial mount)
+      if (!isInitialLoad.current && newUnread > unreadCount) {
+        playNotificationSound();
+      }
 
       if (
         newUnread > unreadCount &&
@@ -39,6 +57,7 @@ export default function NotificationBell() {
       }
 
       setUnreadCount(newUnread);
+      isInitialLoad.current = false;
     } catch {
       // ignore
     }
@@ -85,7 +104,6 @@ export default function NotificationBell() {
     }
   };
 
-  // Single Notification Delete
   const handleDeleteNotification = async (e, id) => {
     e.stopPropagation();
     try {
@@ -97,52 +115,36 @@ export default function NotificationBell() {
     }
   };
 
-  // Clear All Notifications from card
   const handleClearAll = async () => {
-    setLoading(true);
     try {
       await api.delete("/notifications/clear-all");
       setNotifications([]);
       setUnreadCount(0);
     } catch {
       // ignore
-    } finally {
-      setLoading(false);
     }
   };
 
-  const formatTimeAgo = (dateStr) => {
-    const diff = (new Date() - new Date(dateStr)) / 1000;
-    if (diff < 60) return "Just now";
-    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-    return `${Math.floor(diff / 86400)}d ago`;
+  const handleMarkAllRead = async () => {
+    try {
+      await api.patch("/notifications/read-all");
+      setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+      setUnreadCount(0);
+    } catch {
+      // ignore
+    }
   };
 
   return (
-    <div style={{ position: "relative" }} ref={dropdownRef}>
+    <div className="notification-wrapper" ref={dropdownRef} style={{ position: "relative" }}>
       <button
         type="button"
         className="icon-btn"
         onClick={() => setIsOpen((prev) => !prev)}
-        style={{
-          position: "relative",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          width: 38,
-          height: 38,
-          borderRadius: "50%",
-          background: isOpen ? "var(--card-bg, #f3f4f6)" : "transparent",
-          border: "none",
-          cursor: "pointer",
-          color: "var(--text, #374151)",
-          transition: "background 0.2s",
-        }}
         aria-label="Notifications"
-        title="Notifications"
+        style={{ position: "relative" }}
       >
-        <BellIcon size={20} />
+        <BellIcon />
         {unreadCount > 0 && (
           <span
             style={{
@@ -151,16 +153,15 @@ export default function NotificationBell() {
               right: 4,
               background: "#ef4444",
               color: "#fff",
-              fontSize: "0.68rem",
-              fontWeight: 700,
-              minWidth: 17,
-              height: 17,
               borderRadius: "50%",
+              width: 16,
+              height: 16,
+              fontSize: "0.65rem",
+              fontWeight: 700,
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              padding: "0 4px",
-              boxShadow: "0 0 0 2px var(--card-bg, #fff)",
+              border: "2px solid var(--surface, #fff)",
             }}
           >
             {unreadCount > 9 ? "9+" : unreadCount}
@@ -170,75 +171,75 @@ export default function NotificationBell() {
 
       {isOpen && (
         <div
+          className="notification-dropdown"
           style={{
             position: "absolute",
             top: "calc(100% + 8px)",
             right: 0,
-            width: 350,
-            maxHeight: 460,
-            background: "var(--card-bg, #ffffff)",
+            width: 320,
+            maxHeight: 420,
+            background: "var(--surface, #fff)",
             border: "1px solid var(--border, #e5e7eb)",
             borderRadius: 12,
-            boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1)",
-            zIndex: 1000,
+            boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.12)",
             display: "flex",
             flexDirection: "column",
+            zIndex: 60,
             overflow: "hidden",
           }}
         >
-          {/* Header with Clear All */}
           <div
             style={{
+              padding: "12px 14px",
+              borderBottom: "1px solid var(--border, #f1f5f9)",
               display: "flex",
-              alignItems: "center",
               justifyContent: "space-between",
-              padding: "12px 16px",
-              borderBottom: "1px solid var(--border, #e5e7eb)",
-              background: "var(--card-bg, #fafafa)",
+              alignItems: "center",
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <strong style={{ fontSize: "0.95rem" }}>Notifications</strong>
+            <div style={{ fontWeight: 700, fontSize: "0.92rem" }}>
+              Notifications {unreadCount > 0 && `(${unreadCount})`}
+            </div>
+            <div style={{ display: "flex", gap: 10 }}>
               {unreadCount > 0 && (
-                <span
+                <button
+                  type="button"
+                  onClick={handleMarkAllRead}
                   style={{
-                    background: "rgba(239, 68, 68, 0.1)",
-                    color: "#dc2626",
-                    fontSize: "0.72rem",
-                    fontWeight: 700,
-                    padding: "1px 7px",
-                    borderRadius: 10,
+                    background: "none",
+                    border: "none",
+                    color: "var(--primary, #5c6bc0)",
+                    fontSize: "0.75rem",
+                    cursor: "pointer",
+                    fontWeight: 600,
                   }}
                 >
-                  {unreadCount} new
-                </span>
+                  Mark read
+                </button>
+              )}
+              {notifications.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleClearAll}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "#dc2626",
+                    fontSize: "0.75rem",
+                    cursor: "pointer",
+                    fontWeight: 600,
+                  }}
+                >
+                  Clear all
+                </button>
               )}
             </div>
-            {notifications.length > 0 && (
-              <button
-                type="button"
-                onClick={handleClearAll}
-                disabled={loading}
-                style={{
-                  background: "none",
-                  border: "none",
-                  color: "var(--text-secondary, #6b7280)",
-                  fontSize: "0.78rem",
-                  fontWeight: 600,
-                  cursor: "pointer",
-                }}
-                title="Clear all notifications"
-              >
-                Clear all
-              </button>
-            )}
           </div>
 
-          {/* List */}
-          <div style={{ overflowY: "auto", flex: 1 }}>
+          <div style={{ overflowY: "auto", flex: 1, padding: "4px 0" }}>
             {notifications.length === 0 ? (
-              <div style={{ padding: "32px 16px", textAlign: "center", color: "var(--text-secondary, #9ca3af)", fontSize: "0.88rem" }}>
-                No notifications yet
+              <div style={{ padding: "30px 16px", textAlign: "center", color: "var(--muted, #666)", fontSize: "0.85rem" }}>
+                No notifications right now.
               </div>
             ) : (
               notifications.map((n) => (
@@ -246,60 +247,39 @@ export default function NotificationBell() {
                   key={n._id}
                   onClick={() => handleNotificationClick(n._id, n.link)}
                   style={{
-                    padding: "12px 16px",
-                    borderBottom: "1px solid var(--border, #f3f4f6)",
-                    background: n.read ? "transparent" : "var(--primary-subtle, rgba(79, 70, 229, 0.04))",
-                    cursor: n.link ? "pointer" : "default",
+                    padding: "10px 14px",
                     display: "flex",
-                    gap: 10,
+                    justifyContent: "space-between",
                     alignItems: "flex-start",
-                    transition: "background 0.15s",
-                    position: "relative",
+                    gap: 10,
+                    background: n.read ? "transparent" : "var(--soft-2, rgba(92,107,192,0.06))",
+                    borderBottom: "1px solid var(--border, #f8fafc)",
+                    cursor: n.link ? "pointer" : "default",
+                    transition: "background 0.15s ease",
                   }}
                 >
-                  <span
-                    style={{
-                      width: 8,
-                      height: 8,
-                      borderRadius: "50%",
-                      background: n.read ? "transparent" : "#4f46e5",
-                      marginTop: 5,
-                      flexShrink: 0,
-                    }}
-                  />
-                  <div style={{ flex: 1, minWidth: 0, paddingRight: 18 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 6 }}>
-                      <strong style={{ fontSize: "0.85rem", color: "var(--text, #111827)" }}>
-                        {n.title}
-                      </strong>
-                      <span style={{ fontSize: "0.72rem", color: "var(--text-secondary, #9ca3af)", whiteSpace: "nowrap" }}>
-                        {formatTimeAgo(n.createdAt)}
-                      </span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: n.read ? 500 : 700, fontSize: "0.86rem", color: "var(--text, #111)" }}>
+                      {n.title}
                     </div>
-                    <p style={{ margin: "3px 0 0", fontSize: "0.8rem", color: "var(--text-secondary, #4b5563)", lineHeight: 1.35 }}>
+                    <div style={{ fontSize: "0.78rem", color: "var(--text-secondary, #666)", marginTop: 2, lineHeight: 1.35 }}>
                       {n.message}
-                    </p>
+                    </div>
                   </div>
-
-                  {/* Individual Delete [X] Button */}
                   <button
                     type="button"
                     onClick={(e) => handleDeleteNotification(e, n._id)}
                     style={{
-                      position: "absolute",
-                      top: 10,
-                      right: 10,
                       background: "none",
                       border: "none",
-                      color: "var(--text-secondary, #9ca3af)",
+                      color: "var(--muted, #999)",
                       cursor: "pointer",
-                      fontSize: "14px",
-                      lineHeight: 1,
-                      padding: 2,
+                      fontSize: "0.9rem",
+                      padding: "0 4px",
                     }}
-                    title="Dismiss"
+                    title="Delete notification"
                   >
-                    ✕
+                    ×
                   </button>
                 </div>
               ))
