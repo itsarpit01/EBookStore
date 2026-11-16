@@ -15,7 +15,7 @@ const router = express.Router();
 // Public routes (Auth & Razorpay Webhook)
 router.use("/auth", authRoutes);
 router.use("/payment", paymentRoutes);
-router.use("/tickets", ticketRoutes);
+
 
 // Protected routes
 router.use(protect);
@@ -25,5 +25,6 @@ router.use("/users", userRoutes);
 router.use("/purchase-requests", purchaseRequestRoutes);
 router.use("/dashboard", dashboardRoutes);
 router.use("/notifications", notificationRoutes);
+router.use("/tickets", ticketRoutes);
 
 export default router;

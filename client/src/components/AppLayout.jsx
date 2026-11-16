@@ -16,6 +16,7 @@ import {
   LogoutIcon,
   MenuIcon,
   UserIcon,
+  SupportIcon,
 } from "./Icons";
 
 const SERVER_URL =
@@ -31,12 +32,14 @@ const NAV = {
     { to: "/librarian/issues", label: "Issue / Return", icon: IssueIcon },
     { to: "/librarian/requests", label: "Requests", icon: RequestIcon },
     { to: "/librarian/users", label: "Members", icon: UserIcon || DashboardIcon },
+       { to: "/librarian/support", label: "Support Tickets", icon: SupportIcon },
   ],
   purchaser: [
     { to: "/purchaser", label: "Dashboard", icon: DashboardIcon, end: true },
     { to: "/purchaser/books", label: "Browse Books", icon: BookIcon },
     { to: "/purchaser/my-issues", label: "My Issues", icon: IssueIcon },
     { to: "/purchaser/requests", label: "My Requests", icon: RequestIcon },
+     { to: "/purchaser/support", label: "Help & Support", icon: SupportIcon },
   ],
 };
 

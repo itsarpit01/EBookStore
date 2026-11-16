@@ -2,24 +2,43 @@ import Ticket from "../models/Ticket.js";
 import { notifyLibrarians, sendNotification } from "./notificationController.js";
 
 // POST /api/tickets (Purchaser: Raise a new concern)
+// POST /api/tickets
 export const createTicket = async (req, res) => {
   try {
     const { subject, category, message } = req.body;
-    if (!subject || !message) {
-      return res.status(400).json({ message: "Subject and message are required" });
+    
+    const validCategories = ["general", "book", "payment", "account"];
+    if (category && !validCategories.includes(category)) {
+      return res.status(400).json({ message: "Invalid ticket category" });
+    }
+
+    const trimmedSubject = subject?.trim();
+    const trimmedMessage = message?.trim();
+
+    if (!trimmedSubject || trimmedSubject.length < 5) {
+      return res.status(400).json({ message: "Subject must be at least 5 characters" });
+    }
+    if (trimmedSubject.length > 100) {
+      return res.status(400).json({ message: "Subject cannot exceed 100 characters" });
+    }
+
+    if (!trimmedMessage || trimmedMessage.length < 20) {
+      return res.status(400).json({ message: "Description must be at least 20 characters" });
+    }
+    if (trimmedMessage.length > 1000) {
+      return res.status(400).json({ message: "Description cannot exceed 1000 characters" });
     }
 
     const ticket = await Ticket.create({
       user: req.user.id,
-      subject,
+      subject: trimmedSubject,
       category: category || "general",
-      message,
+      message: trimmedMessage,
     });
 
-    // Alert all librarians with sound flag
     await notifyLibrarians({
       title: "New Support Ticket",
-      message: `${req.user.name} submitted a concern: "${subject}"`,
+      message: `${req.user.name} submitted a concern: "${trimmedSubject}"`,
       type: "warning",
       link: "/librarian/support",
     });

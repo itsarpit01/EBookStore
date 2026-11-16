@@ -12,10 +12,12 @@ import LibrarianBooks from "./pages/LibrarianBooks";
 import LibrarianIssues from "./pages/LibrarianIssues";
 import LibrarianRequests from "./pages/LibrarianRequests";
 import LibrarianUsers from "./pages/LibrarianUsers";
+import LibrarianSupport from "./pages/LibrarianSupport";
 import PurchaserHome from "./pages/PurchaserHome";
 import PurchaserBooks from "./pages/PurchaserBooks";
 import PurchaserIssues from "./pages/PurchaserIssues";
 import PurchaserRequests from "./pages/PurchaserRequests";
+import PurchaserSupport from "./pages/PurchaserSupport";
 
 function RootRedirect() {
   const { isAuthenticated, user, loading } = useAuth();
@@ -46,6 +48,7 @@ export default function App() {
           <Route path="issues" element={<LibrarianIssues />} />
           <Route path="requests" element={<LibrarianRequests />} />
           <Route path="users" element={<LibrarianUsers />} />
+          <Route path="support" element={<LibrarianSupport />} />
           <Route path="profile" element={<Profile />} />
         </Route>
       </Route>
@@ -57,6 +60,7 @@ export default function App() {
           <Route path="books" element={<PurchaserBooks />} />
           <Route path="my-issues" element={<PurchaserIssues />} />
           <Route path="requests" element={<PurchaserRequests />} />
+             <Route path="support" element={<PurchaserSupport />} />
           <Route path="profile" element={<Profile />} />
         </Route>
       </Route>
