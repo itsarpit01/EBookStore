@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../api/axios";
 import { BellIcon } from "./Icons";
-import { playNotificationSound, unlockAudio } from "../utils/sound";
+import { playNotificationSound } from "../utils/sound";
 
 export default function NotificationBell() {
   const navigate = useNavigate();
@@ -11,18 +11,8 @@ export default function NotificationBell() {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef(null);
 
-  // Track initial load so sound only plays on newly arriving notifications
   const isInitialLoad = useRef(true);
-
-  // Unlock audio on first user click to satisfy browser autoplay policies
-  useEffect(() => {
-    const handleFirstClick = () => {
-      unlockAudio();
-      window.removeEventListener("click", handleFirstClick);
-    };
-    window.addEventListener("click", handleFirstClick, { once: true });
-    return () => window.removeEventListener("click", handleFirstClick);
-  }, []);
+  const prevCountRef = useRef(0);
 
   useEffect(() => {
     if ("Notification" in window && Notification.permission === "default") {
@@ -37,12 +27,13 @@ export default function NotificationBell() {
       const newUnread = res.data.unreadCount || 0;
 
       // Play alert sound when new notification arrives (skip initial mount)
-      if (!isInitialLoad.current && newUnread > unreadCount) {
+      if (!isInitialLoad.current && newUnread > prevCountRef.current) {
         playNotificationSound();
+        window.dispatchEvent(new Event("ticket-updated"));
       }
 
       if (
-        newUnread > unreadCount &&
+        newUnread > prevCountRef.current &&
         "Notification" in window &&
         Notification.permission === "granted" &&
         document.visibilityState !== "visible"
@@ -57,15 +48,17 @@ export default function NotificationBell() {
       }
 
       setUnreadCount(newUnread);
+      prevCountRef.current = newUnread;
       isInitialLoad.current = false;
     } catch {
       // ignore
     }
-  }, [unreadCount]);
+  }, []);
 
   useEffect(() => {
     fetchNotifications();
-    const interval = setInterval(fetchNotifications, 15000);
+    // 4-second live poll for instantaneous updates
+    const interval = setInterval(fetchNotifications, 4000);
 
     const onFocus = () => fetchNotifications();
     window.addEventListener("focus", onFocus);
@@ -95,6 +88,7 @@ export default function NotificationBell() {
         prev.map((n) => (n._id === id ? { ...n, read: true } : n))
       );
       setUnreadCount((c) => Math.max(0, c - 1));
+      prevCountRef.current = Math.max(0, prevCountRef.current - 1);
       if (link) {
         setIsOpen(false);
         navigate(link);
@@ -110,6 +104,7 @@ export default function NotificationBell() {
       await api.delete(`/notifications/${id}`);
       setNotifications((prev) => prev.filter((n) => n._id !== id));
       setUnreadCount((c) => Math.max(0, c - 1));
+      prevCountRef.current = Math.max(0, prevCountRef.current - 1);
     } catch {
       // ignore
     }
@@ -120,6 +115,7 @@ export default function NotificationBell() {
       await api.delete("/notifications/clear-all");
       setNotifications([]);
       setUnreadCount(0);
+      prevCountRef.current = 0;
     } catch {
       // ignore
     }
@@ -130,6 +126,7 @@ export default function NotificationBell() {
       await api.patch("/notifications/read-all");
       setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
       setUnreadCount(0);
+      prevCountRef.current = 0;
     } catch {
       // ignore
     }

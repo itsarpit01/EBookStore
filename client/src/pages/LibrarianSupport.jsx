@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import api from "../api/axios";
 import { useToast } from "../context/ToastContext";
 import { getErrorMessage } from "../utils/errors";
 import { formatDate } from "../utils/format";
 import { CloseIcon, CheckIcon } from "../components/Icons";
+import { playNotificationSound } from "../utils/sound";
 
 export default function LibrarianSupport() {
   const toast = useToast();
@@ -11,27 +12,61 @@ export default function LibrarianSupport() {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("open"); // "open" | "resolved" | "all"
 
+  // Live real-time tracking
+  const isInitialLoad = useRef(true);
+  const prevOpenCountRef = useRef(0);
+
   // Resolve Modal State
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [resolutionNote, setResolutionNote] = useState("");
   const [resolving, setResolving] = useState(false);
 
-  const fetchTickets = async () => {
-    try {
-      setLoading(true);
-      const query = filter !== "all" ? `?status=${filter}` : "";
-      const res = await api.get(`/tickets${query}`);
-      setTickets(Array.isArray(res.data) ? res.data : []);
-    } catch (err) {
-      toast.error(getErrorMessage(err));
-    } finally {
-      setLoading(false);
-    }
-  };
+  const fetchTickets = useCallback(
+    async (silent = false) => {
+      try {
+        if (!silent) setLoading(true);
+        const query = filter !== "all" ? `?status=${filter}` : "";
+        const res = await api.get(`/tickets${query}`);
+        const data = Array.isArray(res.data) ? res.data : [];
+
+        // Check if a new open ticket has arrived in real-time
+        const currentOpenCount = data.filter((t) => t.status === "open").length;
+        if (!isInitialLoad.current && filter !== "resolved") {
+          if (currentOpenCount > prevOpenCountRef.current) {
+            playNotificationSound();
+            toast.info("New support concern received from a member!");
+          }
+        }
+
+        setTickets(data);
+        prevOpenCountRef.current = currentOpenCount;
+        isInitialLoad.current = false;
+      } catch (err) {
+        if (!silent) toast.error(getErrorMessage(err));
+      } finally {
+        if (!silent) setLoading(false);
+      }
+    },
+    [filter, toast]
+  );
 
   useEffect(() => {
-    fetchTickets();
-  }, [filter]);
+    isInitialLoad.current = true;
+    fetchTickets(false);
+
+    // Live background polling every 4 seconds (silent = true so no screen flicker)
+    const interval = setInterval(() => fetchTickets(true), 4000);
+
+    const onFocus = () => fetchTickets(true);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("ticket-updated", onFocus);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("ticket-updated", onFocus);
+    };
+  }, [fetchTickets]);
 
   const handleResolveSubmit = async (e) => {
     e.preventDefault();
@@ -45,15 +80,13 @@ export default function LibrarianSupport() {
       toast.success("Ticket resolved and user notified");
       setSelectedTicket(null);
       setResolutionNote("");
-      fetchTickets();
+      fetchTickets(true);
     } catch (err) {
       toast.error(getErrorMessage(err));
     } finally {
       setResolving(false);
     }
   };
-
-  const openTicketsCount = tickets.filter((t) => t.status === "open").length;
 
   return (
     <>
@@ -62,6 +95,24 @@ export default function LibrarianSupport() {
           <h2>Member Support Desk</h2>
           <p>Review inquiries, resolve member discrepancies, and dispatch resolution updates.</p>
         </div>
+
+        {/* Test Alert Sound Button */}
+        <button
+          type="button"
+          className="btn btn-soft"
+          onClick={() => {
+            playNotificationSound();
+            toast.success("Playing notification alert sound");
+          }}
+          style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: "0.85rem" }}
+          title="Click to verify speaker output and unlock browser audio"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+            <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" />
+          </svg>
+          <span>Test Sound</span>
+        </button>
       </div>
 
       {/* Filter Tabs */}
