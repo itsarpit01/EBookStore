@@ -896,53 +896,86 @@ export default function Profile() {
             </div>
           </form>
 
-          {/* Danger Zone: Delete Account (Purchaser Only) */}
+          {/* Account Deletion (Purchaser Only) */}
           {user?.role === "purchaser" && (
             <div
               className="card"
               style={{
-                border: "1px solid #fecaca",
+                border: "1px solid rgba(220, 38, 38, 0.25)",
                 background: "var(--surface, #ffffff)",
+                padding: "20px 24px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 20,
+                flexWrap: "wrap",
               }}
             >
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-                <div
+              <div style={{ flex: 1, minWidth: 260 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                  <h3 style={{ margin: 0, fontSize: "1rem", fontWeight: 700, color: "var(--text, #111827)" }}>
+                    Delete Account
+                  </h3>
+                  <span
+                    style={{
+                      fontSize: "0.7rem",
+                      fontWeight: 700,
+                      padding: "2px 8px",
+                      borderRadius: 999,
+                      background: "rgba(220, 38, 38, 0.08)",
+                      color: "#dc2626",
+                      letterSpacing: "0.03em",
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    Irreversible
+                  </span>
+                </div>
+                <p
                   style={{
-                    width: 32,
-                    height: 32,
-                    borderRadius: "50%",
-                    background: "#fee2e2",
-                    color: "#dc2626",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    flexShrink: 0,
+                    margin: 0,
+                    fontSize: "0.85rem",
+                    color: "var(--text-secondary, #6b7280)",
+                    lineHeight: 1.5,
                   }}
                 >
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="3 6 5 6 21 6" />
-                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                    <line x1="10" y1="11" x2="10" y2="17" />
-                    <line x1="14" y1="11" x2="14" y2="17" />
-                  </svg>
-                </div>
-                <h3 style={{ margin: 0, fontSize: "1.1rem", color: "#dc2626" }}>Danger Zone</h3>
+                  Permanently delete your account, active membership, and all associated library history. This action cannot be undone.
+                </p>
               </div>
-
-              <p style={{ margin: "0 0 16px 0", fontSize: "0.85rem", color: "var(--text-secondary, #666)", lineHeight: 1.45 }}>
-                Permanently close your account. All borrowing history, payment records, and active membership benefits will be deleted.
-              </p>
 
               <button
                 type="button"
-                className="btn"
                 onClick={() => setShowDeleteModal(true)}
                 style={{
-                  background: "#dc2626",
-                  borderColor: "#dc2626",
-                  color: "#ffffff",
+                  padding: "9px 18px",
+                  fontSize: "0.88rem",
+                  fontWeight: 600,
+                  color: "#dc2626",
+                  background: "transparent",
+                  border: "1px solid #dc2626",
+                  borderRadius: "8px",
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 8,
+                  transition: "all 0.15s ease",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = "#dc2626";
+                  e.currentTarget.style.color = "#ffffff";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "transparent";
+                  e.currentTarget.style.color = "#dc2626";
                 }}
               >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="3 6 5 6 21 6" />
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                  <line x1="10" y1="11" x2="10" y2="17" />
+                  <line x1="14" y1="11" x2="14" y2="17" />
+                </svg>
                 Delete Account
               </button>
             </div>

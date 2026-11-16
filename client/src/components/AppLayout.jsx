@@ -6,7 +6,6 @@ import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import ConfirmModal from "./ConfirmModal";
 import MembershipModal from "./MembershipModal";
-import DeleteAccountModal from "./DeleteAccountModal";
 import ThemeToggle from "./ThemeToggle";
 import { getEffectiveTier } from "../utils/membershipConfig";
 import {
@@ -49,7 +48,6 @@ export default function AppLayout() {
 
   const [open, setOpen] = useState(false);
   const [confirmLogout, setConfirmLogout] = useState(false);
-  const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [avatarBroken, setAvatarBroken] = useState(false);
   const [showMembershipModal, setShowMembershipModal] = useState(false);
 
@@ -476,41 +474,6 @@ export default function AppLayout() {
                     <LogoutIcon size={16} />
                     <span>Logout</span>
                   </button>
-
-                  {/* Delete Account (Purchaser Only) */}
-                  {user?.role === "purchaser" && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setDropdownOpen(false);
-                        setShowDeleteModal(true);
-                      }}
-                      style={{
-                        width: "100%",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 10,
-                        padding: "9px 12px",
-                        marginTop: 2,
-                        border: "none",
-                        background: "transparent",
-                        borderRadius: 8,
-                        cursor: "pointer",
-                        fontSize: "0.88rem",
-                        fontWeight: 600,
-                        color: "#dc2626",
-                        textAlign: "left",
-                      }}
-                    >
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="3 6 5 6 21 6" />
-                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                        <line x1="10" y1="11" x2="10" y2="17" />
-                        <line x1="14" y1="11" x2="14" y2="17" />
-                      </svg>
-                      <span>Delete Account</span>
-                    </button>
-                  )}
                 </div>
               )}
             </div>
@@ -535,13 +498,6 @@ export default function AppLayout() {
 
       {showMembershipModal && (
         <MembershipModal onClose={() => setShowMembershipModal(false)} />
-      )}
-
-      {showDeleteModal && (
-        <DeleteAccountModal
-          userEmail={user?.email}
-          onClose={() => setShowDeleteModal(false)}
-        />
       )}
     </div>
   );
