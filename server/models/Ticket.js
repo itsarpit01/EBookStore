@@ -1,5 +1,31 @@
 import mongoose from "mongoose";
 
+const commentSchema = new mongoose.Schema(
+  {
+    sender: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+    senderRole: {
+      type: String,
+      enum: ["librarian", "purchaser"],
+      required: true,
+    },
+    message: {
+      type: String,
+      required: [true, "Message is required"],
+      trim: true,
+      maxlength: 1000,
+    },
+    createdAt: {
+      type: Date,
+      default: Date.now,
+    },
+  },
+  { _id: true }
+);
+
 const ticketSchema = new mongoose.Schema(
   {
     user: {
@@ -31,6 +57,7 @@ const ticketSchema = new mongoose.Schema(
       default: "open",
       index: true,
     },
+    comments: [commentSchema],
     resolutionNote: {
       type: String,
       trim: true,

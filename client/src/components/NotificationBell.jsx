@@ -32,7 +32,13 @@ export default function NotificationBell() {
         window.dispatchEvent(new Event("ticket-updated"));
       }
 
+      // Check user setting before showing desktop pop-up
+      const popupsAllowed =
+        typeof window !== "undefined" &&
+        localStorage.getItem("library_notification_popups") !== "false";
+
       if (
+        popupsAllowed &&
         newUnread > prevCountRef.current &&
         "Notification" in window &&
         Notification.permission === "granted" &&

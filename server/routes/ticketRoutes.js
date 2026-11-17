@@ -5,10 +5,14 @@ import {
   getAllTickets,
   resolveTicket,
   deleteTicket,
+  addComment,
 } from "../controllers/ticketController.js";
 import { authorizeRoles } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
+
+// Shared authenticated comment route
+router.post("/:id/comments", addComment);
 
 // Purchaser routes
 router.post("/", authorizeRoles("purchaser"), createTicket);

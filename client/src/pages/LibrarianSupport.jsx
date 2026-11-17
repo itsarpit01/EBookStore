@@ -21,6 +21,32 @@ export default function LibrarianSupport() {
   const [resolutionNote, setResolutionNote] = useState("");
   const [resolving, setResolving] = useState(false);
 
+  // Threading / Comments State
+  const [replyInputs, setReplyInputs] = useState({});
+  const [submittingReply, setSubmittingReply] = useState({});
+
+  const handleReplyInputChange = (ticketId, value) => {
+    setReplyInputs((prev) => ({ ...prev, [ticketId]: value }));
+  };
+
+  const handleSendReply = async (e, ticketId) => {
+    e.preventDefault();
+    const text = (replyInputs[ticketId] || "").trim();
+    if (!text) return;
+
+    try {
+      setSubmittingReply((prev) => ({ ...prev, [ticketId]: true }));
+      const res = await api.post(`/tickets/${ticketId}/comments`, { message: text });
+      toast.success("Reply posted to thread");
+      setReplyInputs((prev) => ({ ...prev, [ticketId]: "" }));
+      setTickets((prev) => prev.map((t) => (t._id === ticketId ? res.data : t)));
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setSubmittingReply((prev) => ({ ...prev, [ticketId]: false }));
+    }
+  };
+
   const fetchTickets = useCallback(
     async (silent = false) => {
       try {
@@ -101,7 +127,7 @@ export default function LibrarianSupport() {
       <div
         style={{
           display: "flex",
-          gap: 10,
+          gap: 20,
           borderBottom: "1px solid var(--border, #e5e7eb)",
           marginBottom: 20,
         }}
@@ -110,9 +136,9 @@ export default function LibrarianSupport() {
           type="button"
           onClick={() => setFilter("open")}
           style={{
-            padding: "8px 16px",
+            background: "none",
             border: "none",
-            background: "transparent",
+            padding: "8px 4px",
             cursor: "pointer",
             fontWeight: 600,
             fontSize: "0.9rem",
@@ -120,16 +146,15 @@ export default function LibrarianSupport() {
             borderBottom: filter === "open" ? "2.5px solid var(--primary, #5c6bc0)" : "2.5px solid transparent",
           }}
         >
-          Open Concerns {filter === "open" && `(${tickets.length})`}
+          Open ({tickets.filter((t) => t.status === "open").length})
         </button>
-
         <button
           type="button"
           onClick={() => setFilter("resolved")}
           style={{
-            padding: "8px 16px",
+            background: "none",
             border: "none",
-            background: "transparent",
+            padding: "8px 4px",
             cursor: "pointer",
             fontWeight: 600,
             fontSize: "0.9rem",
@@ -137,16 +162,15 @@ export default function LibrarianSupport() {
             borderBottom: filter === "resolved" ? "2.5px solid var(--primary, #5c6bc0)" : "2.5px solid transparent",
           }}
         >
-          Resolved Archive {filter === "resolved" && `(${tickets.length})`}
+          Resolved
         </button>
-
         <button
           type="button"
           onClick={() => setFilter("all")}
           style={{
-            padding: "8px 16px",
+            background: "none",
             border: "none",
-            background: "transparent",
+            padding: "8px 4px",
             cursor: "pointer",
             fontWeight: 600,
             fontSize: "0.9rem",
@@ -239,6 +263,7 @@ export default function LibrarianSupport() {
                 </div>
               </div>
 
+              {/* Initial Concern Description */}
               <div
                 style={{
                   background: "var(--soft-2, rgba(0,0,0,0.02))",
@@ -251,6 +276,87 @@ export default function LibrarianSupport() {
                 }}
               >
                 {t.message}
+              </div>
+
+              {/* Discussion Thread */}
+              <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid var(--border, #f1f5f9)" }}>
+                <div style={{ fontSize: "0.82rem", fontWeight: 700, color: "var(--text, #111)", marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
+                  <span>Discussion Thread</span>
+                  <span style={{ fontSize: "0.75rem", color: "var(--text-secondary, #666)", fontWeight: 500 }}>
+                    ({t.comments?.length || 0} {t.comments?.length === 1 ? "reply" : "replies"})
+                  </span>
+                </div>
+
+                {/* Comment Bubbles */}
+                {t.comments && t.comments.length > 0 && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 12 }}>
+                    {t.comments.map((c) => {
+                      const isStaff = c.senderRole === "librarian";
+                      return (
+                        <div
+                          key={c._id || c.createdAt}
+                          style={{
+                            padding: "10px 14px",
+                            borderRadius: 8,
+                            background: isStaff ? "rgba(92, 107, 192, 0.08)" : "var(--surface, #f9fafb)",
+                            border: isStaff ? "1px solid rgba(92, 107, 192, 0.25)" : "1px solid var(--border, #e5e7eb)",
+                            alignSelf: isStaff ? "flex-end" : "flex-start",
+                            maxWidth: "85%",
+                          }}
+                        >
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
+                            <span style={{ fontSize: "0.8rem", fontWeight: 700, color: isStaff ? "var(--primary, #5c6bc0)" : "var(--text, #111)" }}>
+                              {c.sender?.name || (isStaff ? "Library Staff" : "Member")}
+                            </span>
+                            <span
+                              style={{
+                                fontSize: "0.68rem",
+                                padding: "1px 6px",
+                                borderRadius: 4,
+                                fontWeight: 600,
+                                background: isStaff ? "var(--primary, #5c6bc0)" : "#e2e8f0",
+                                color: isStaff ? "#fff" : "#475569",
+                                textTransform: "uppercase",
+                              }}
+                            >
+                              {c.senderRole}
+                            </span>
+                            <span style={{ fontSize: "0.72rem", color: "var(--text-secondary, #888)" }}>
+                              {formatDate(c.createdAt)}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: "0.86rem", color: "var(--text, #222)", lineHeight: 1.45, whiteSpace: "pre-wrap" }}>
+                            {c.message}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Reply Form (Active when ticket is open) */}
+                {t.status === "open" ? (
+                  <form onSubmit={(e) => handleSendReply(e, t._id)} style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                    <input
+                      type="text"
+                      placeholder="Type a reply to this member's concern..."
+                      value={replyInputs[t._id] || ""}
+                      onChange={(e) => handleReplyInputChange(t._id, e.target.value)}
+                      style={{ flex: 1, padding: "8px 12px", fontSize: "0.85rem" }}
+                    />
+                    <button
+                      type="submit"
+                      className="btn btn-sm"
+                      disabled={submittingReply[t._id] || !replyInputs[t._id]?.trim()}
+                    >
+                      {submittingReply[t._id] ? "Sending..." : "Reply"}
+                    </button>
+                  </form>
+                ) : (
+                  <div style={{ fontSize: "0.78rem", color: "var(--text-secondary, #666)", fontStyle: "italic", marginTop: 4 }}>
+                    This concern is marked as resolved. The discussion thread is archived.
+                  </div>
+                )}
               </div>
 
               {t.status === "resolved" && (
@@ -323,8 +429,12 @@ export default function LibrarianSupport() {
                 >
                   Cancel
                 </button>
-                <button type="submit" className="btn" disabled={resolving}>
-                  {resolving ? "Resolving..." : "Mark as Resolved"}
+                <button
+                  type="submit"
+                  className="btn"
+                  disabled={resolving || !resolutionNote.trim()}
+                >
+                  {resolving ? "Resolving..." : "Confirm & Resolve Ticket"}
                 </button>
               </div>
             </form>

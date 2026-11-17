@@ -61,6 +61,23 @@ export default function Profile() {
   const [pwFormError, setPwFormError] = useState("");
   const [savingPw, setSavingPw] = useState(false);
 
+  // Desktop notification pop-ups preference (stored in localStorage)
+  const [notificationPopups, setNotificationPopups] = useState(() => {
+    return localStorage.getItem("library_notification_popups") !== "false";
+  });
+
+  const handleToggleNotificationPopups = (e) => {
+    const nextVal = e.target.checked;
+    setNotificationPopups(nextVal);
+    localStorage.setItem("library_notification_popups", String(nextVal));
+    window.dispatchEvent(new Event("notification-pref-updated"));
+    if (nextVal) {
+      toast.success("Desktop pop-up notifications enabled");
+    } else {
+      toast.info("Desktop pop-ups disabled. Updates will quietly appear in the bell.");
+    }
+  };
+
   const tier = getEffectiveTier(user);
 
   const loadTransactions = useCallback(() => {
@@ -74,88 +91,85 @@ export default function Profile() {
   }, [user?.role]);
 
   useEffect(() => {
-    Promise.all([
-      api.get("/users/me"),
-      api.get("/issues/my").catch(() => ({ data: [] })),
-      api.get("/purchase-requests/my").catch(() => ({ data: [] })),
-    ])
-      .then(([userRes, issueRes, reqRes]) => {
-        setProfile(userRes.data);
-        setName(userRes.data.name);
-
-        const issues = Array.isArray(issueRes.data) ? issueRes.data : [];
-        const activeIssues = issues.filter((i) => i.status === "issued").length;
-        setActiveBooksCount(activeIssues);
-
-        const requests = Array.isArray(reqRes.data) ? reqRes.data : [];
-        const activeReqs = requests.filter((r) =>
-          ["pending", "counter_offered"].includes(r.status)
-        ).length;
-        setActiveRequestsCount(activeReqs);
+    api
+      .get("/users/profile")
+      .then((res) => {
+        setProfile(res.data);
+        setName(res.data.name || "");
       })
-      .catch((err) => toast.error(getErrorMessage(err)));
+      .catch((err) => toast.error(getErrorMessage(err, "Failed to load profile")));
 
-    loadTransactions();
+    if (user?.role === "purchaser") {
+      api
+        .get("/issues/my")
+        .then((res) => {
+          const issued = (res.data || []).filter(
+            (i) => i.status === "issued" || i.status === "overdue"
+          );
+          setActiveBooksCount(issued.length);
+        })
+        .catch(() => {});
 
-    const onQuotaUpdated = () => {
+      api
+        .get("/purchase-requests/my")
+        .then((res) => {
+          const pending = (res.data || []).filter(
+            (r) => r.status === "pending" || r.status === "approved"
+          );
+          setActiveRequestsCount(pending.length);
+        })
+        .catch(() => {});
+
       loadTransactions();
-    };
-    window.addEventListener("quota-updated", onQuotaUpdated);
-    return () => window.removeEventListener("quota-updated", onQuotaUpdated);
-  }, [toast, loadTransactions]);
+    }
+  }, [user?.role, toast, loadTransactions]);
 
-  const processAvatar = (file) => {
+  const handleFileSelect = (file) => {
     if (!file) return;
-    const allowed = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
-    if (!allowed.includes(file.type)) {
-      toast.error("Only image files (jpeg, jpg, png, webp) are allowed");
+    if (!file.type.startsWith("image/")) {
+      toast.error("Please upload a valid image file");
       return;
     }
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error("File size must be under 5MB");
+    if (file.size > 2 * 1024 * 1024) {
+      toast.error("Image size must be less than 2MB");
       return;
     }
-    setRawAvatarSrc(URL.createObjectURL(file));
-    setShowCropper(true);
+    const reader = new FileReader();
+    reader.onload = () => {
+      setRawAvatarSrc(reader.result);
+      setShowCropper(true);
+    };
+    reader.readAsDataURL(file);
   };
 
-  const handleCropComplete = (croppedFile) => {
-    setAvatarFile(croppedFile);
-    setAvatarPreview(URL.createObjectURL(croppedFile));
+  const handleCropComplete = (croppedBlob) => {
+    setAvatarFile(croppedBlob);
+    setAvatarPreview(URL.createObjectURL(croppedBlob));
     setShowCropper(false);
   };
 
-  const handleAvatarChange = (e) => {
-    processAvatar(e.target.files[0]);
-  };
+  const saveAvatar = async () => {
+    if (!avatarFile) return;
+    const formData = new FormData();
+    formData.append("avatar", avatarFile, "avatar.jpg");
 
-  const handleDragEnter = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(true);
-  };
-
-  const handleDragOver = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(true);
-  };
-
-  const handleDragLeave = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(false);
-  };
-
-  const handleDrop = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(false);
-
-    const files = e.dataTransfer.files;
-    if (files && files.length > 0) {
-      processAvatar(files[0]);
+    try {
+      const res = await api.put("/users/profile/avatar", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      updateUser(res.data);
+      setProfile((p) => ({ ...p, avatar: res.data.avatar }));
+      setAvatarFile(null);
+      setAvatarPreview(null);
+      toast.success("Profile photo updated");
+    } catch (err) {
+      toast.error(getErrorMessage(err, "Failed to update profile photo"));
     }
+  };
+
+  const cancelAvatar = () => {
+    setAvatarFile(null);
+    setAvatarPreview(null);
   };
 
   const saveName = async (e) => {
@@ -164,158 +178,130 @@ export default function Profile() {
 
     const parsed = profileSchema.safeParse({ name });
     if (!parsed.success) {
-      setNameError(parsed.error.issues[0]?.message || "Invalid name");
+      const issues = parsed.error.issues;
+      if (issues.length) setNameError(issues[0].message);
       return;
     }
 
     setSavingName(true);
     try {
-      const formData = new FormData();
-      formData.append("name", name.trim());
-      if (avatarFile) {
-        formData.append("avatar", avatarFile);
-      }
-
-      const res = await api.put("/users/profile", formData, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
-
-      setProfile(res.data);
+      const res = await api.put("/users/profile", { name: parsed.data.name });
       updateUser(res.data);
-      setAvatarFile(null);
-      toast.success("Profile updated");
+      setProfile((p) => ({ ...p, name: res.data.name }));
+      toast.success("Name updated");
     } catch (err) {
-      setNameError(getErrorMessage(err));
+      const fe = getFieldErrors(err);
+      if (fe.name) setNameError(fe.name);
+      else toast.error(getErrorMessage(err, "Failed to update name"));
     } finally {
       setSavingName(false);
     }
   };
 
   const changePw = (e) => {
-    setPw((p) => ({ ...p, [e.target.name]: e.target.value }));
-    setPwErrors((er) => ({ ...er, [e.target.name]: undefined }));
+    const { name, value } = e.target;
+    setPw((p) => ({ ...p, [name]: value }));
+    setPwErrors((pe) => ({ ...pe, [name]: undefined }));
+    setPwFormError("");
   };
 
   const savePw = async (e) => {
     e.preventDefault();
-    setPwFormError("");
     setPwErrors({});
+    setPwFormError("");
 
     const parsed = passwordFormSchema.safeParse(pw);
     if (!parsed.success) {
-      const fieldErrors = {};
-      parsed.error.issues.forEach((issue) => {
-        const fieldName = issue.path[0];
-        if (!fieldErrors[fieldName]) {
-          fieldErrors[fieldName] = issue.message;
-        }
+      const fe = {};
+      parsed.error.issues.forEach((i) => {
+        if (!fe[i.path[0]]) fe[i.path[0]] = i.message;
       });
-      setPwErrors(fieldErrors);
+      setPwErrors(fe);
       return;
     }
 
     setSavingPw(true);
     try {
-      await api.put("/users/password", {
-        currentPassword: pw.currentPassword,
-        newPassword: pw.newPassword,
+      await api.put("/users/change-password", {
+        currentPassword: parsed.data.currentPassword,
+        newPassword: parsed.data.newPassword,
       });
-      toast.success("Password updated");
+      toast.success("Password updated successfully");
       setPw(emptyPw);
     } catch (err) {
       const fe = getFieldErrors(err);
-      if (fe.currentPassword || fe.newPassword) setPwErrors(fe);
-      else setPwFormError(getErrorMessage(err));
+      if (Object.keys(fe).length) setPwErrors(fe);
+      else setPwFormError(getErrorMessage(err, "Failed to change password"));
     } finally {
       setSavingPw(false);
     }
   };
 
-  const avatarSrc = avatarPreview || (profile?.avatar ? `${SERVER_URL}${profile.avatar}` : null);
-  const unchanged = name.trim() === (profile?.name ?? user?.name) && !avatarFile;
+  const avatarSrc = avatarPreview
+    ? avatarPreview
+    : profile?.avatar
+    ? profile.avatar.startsWith("http")
+      ? profile.avatar
+      : `${SERVER_URL}${profile.avatar}`
+    : null;
 
-  // Active Capacity Math
-  const totalActiveSlots = activeBooksCount + activeRequestsCount;
-  const remainingSlots =
-    tier.maxBooks === Infinity ? Infinity : Math.max(0, tier.maxBooks - totalActiveSlots);
-
-  const usagePercentage =
-    tier.maxBooks === Infinity
-      ? 10
-      : Math.min(100, Math.round((totalActiveSlots / tier.maxBooks) * 100));
-
-  // Pagination for Transaction History
-  const totalTxPages = Math.ceil(transactions.length / txPerPage) || 1;
-  const paginatedTransactions = transactions.slice((txPage - 1) * txPerPage, txPage * txPerPage);
+  const totalPages = Math.ceil(transactions.length / txPerPage);
+  const currentTransactions = transactions.slice(
+    (txPage - 1) * txPerPage,
+    txPage * txPerPage
+  );
 
   return (
     <>
-      <div className="page-head" style={{ marginBottom: 16 }}>
+      <div className="page-head">
         <div>
-          <h2>Account Center</h2>
-          <p>Manage your profile, view subscription limits, and monitor transactions.</p>
+          <h2>Account Settings</h2>
+          <p>Manage your profile, security preferences, and subscription tier.</p>
         </div>
       </div>
 
-      {/* Modern Profile Tabs Header */}
+      {/* Profile Navigation Tabs */}
       <div
         style={{
           display: "flex",
-          gap: 8,
+          gap: 20,
           borderBottom: "1px solid var(--border, #e5e7eb)",
           marginBottom: 24,
-          overflowX: "auto",
         }}
       >
         <button
           type="button"
           onClick={() => setActiveTab("profile")}
           style={{
-            padding: "9px 18px",
+            background: "none",
             border: "none",
-            background: "transparent",
+            padding: "10px 4px",
             cursor: "pointer",
             fontWeight: 600,
-            fontSize: "0.92rem",
+            fontSize: "0.95rem",
             color: activeTab === "profile" ? "var(--primary, #5c6bc0)" : "var(--text-secondary, #666)",
             borderBottom: activeTab === "profile" ? "2.5px solid var(--primary, #5c6bc0)" : "2.5px solid transparent",
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            transition: "all 0.15s ease",
           }}
         >
-          <UserIcon size={16} />
-          <span>Profile</span>
+          Profile
         </button>
 
         {user?.role === "purchaser" && (
           <button
             type="button"
-            onClick={() => {
-              setActiveTab("transactions");
-              setTxPage(1);
-            }}
+            onClick={() => setActiveTab("transactions")}
             style={{
-              padding: "9px 18px",
+              background: "none",
               border: "none",
-              background: "transparent",
+              padding: "10px 4px",
               cursor: "pointer",
               fontWeight: 600,
-              fontSize: "0.92rem",
+              fontSize: "0.95rem",
               color: activeTab === "transactions" ? "var(--primary, #5c6bc0)" : "var(--text-secondary, #666)",
               borderBottom: activeTab === "transactions" ? "2.5px solid var(--primary, #5c6bc0)" : "2.5px solid transparent",
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              transition: "all 0.15s ease",
             }}
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="2" y="5" width="20" height="14" rx="2" />
-              <line x1="2" y1="10" x2="22" y2="10" />
-            </svg>
-            <span>Transaction History</span>
+            Transactions
           </button>
         )}
 
@@ -323,527 +309,381 @@ export default function Profile() {
           type="button"
           onClick={() => setActiveTab("settings")}
           style={{
-            padding: "9px 18px",
+            background: "none",
             border: "none",
-            background: "transparent",
+            padding: "10px 4px",
             cursor: "pointer",
             fontWeight: 600,
-            fontSize: "0.92rem",
+            fontSize: "0.95rem",
             color: activeTab === "settings" ? "var(--primary, #5c6bc0)" : "var(--text-secondary, #666)",
             borderBottom: activeTab === "settings" ? "2.5px solid var(--primary, #5c6bc0)" : "2.5px solid transparent",
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            transition: "all 0.15s ease",
           }}
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="3" />
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-          </svg>
-          <span>Settings</span>
+          Settings
         </button>
       </div>
 
       {/* ============================================================== */}
-      {/* TAB 1: PROFILE DETAILS & RECENT 5 TRANSACTIONS                */}
+      {/* TAB 1: PROFILE DETAILS & MEMBERSHIP                            */}
       {/* ============================================================== */}
       {activeTab === "profile" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-          <div
-            className="profile-grid"
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
-              gap: 20,
-              alignItems: "stretch",
-            }}
-          >
-            {/* Card 1: Profile Details */}
-            <form
-              className="card"
-              onSubmit={saveName}
-              noValidate
-              style={{ display: "flex", flexDirection: "column", height: "100%" }}
+        <div style={{ maxWidth: 650, display: "flex", flexDirection: "column", gap: 24 }}>
+          {/* Avatar Section */}
+          <div className="card" style={{ display: "flex", alignItems: "center", gap: 24 }}>
+            <div
+              style={{
+                width: 90,
+                height: 90,
+                borderRadius: "50%",
+                overflow: "hidden",
+                border: "2px solid var(--border, #e5e7eb)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                background: "var(--soft, #f3f4f6)",
+                flexShrink: 0,
+              }}
             >
-              <div style={{ flex: 1 }}>
-                <div className="profile-head">
-                  <label
-                    htmlFor="avatarInput"
-                    onDragEnter={handleDragEnter}
-                    onDragOver={handleDragOver}
-                    onDragLeave={handleDragLeave}
-                    onDrop={handleDrop}
-                    style={{
-                      cursor: "pointer",
-                      position: "relative",
-                      display: "inline-block",
-                      padding: 4,
-                      borderRadius: "50%",
-                      border: isDragging ? "2px dashed var(--primary, #5c6bc0)" : "2px dashed transparent",
-                      transform: isDragging ? "scale(1.12)" : "scale(1)",
-                      transition: "all 0.2s ease",
-                    }}
-                    title="Click or drag and drop image here"
-                  >
-                    <div style={{ pointerEvents: "none" }}>
-                      {avatarSrc ? (
-                        <img
-                          className="avatar avatar-lg"
-                          src={avatarSrc}
-                          alt="avatar"
-                          style={{ width: 64, height: 64, borderRadius: "50%", objectFit: "cover" }}
-                        />
-                      ) : (
-                        <span className="avatar avatar-lg">{user?.name?.[0]?.toUpperCase()}</span>
-                      )}
-                      <span
-                        style={{
-                          position: "absolute",
-                          bottom: 0,
-                          right: 0,
-                          background: "var(--primary, #5c6bc0)",
-                          color: "#fff",
-                          borderRadius: "50%",
-                          width: 22,
-                          height: 22,
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          fontSize: 12,
-                          border: "2px solid #fff",
-                        }}
-                      >
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M12 20h9" />
-                          <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
-                        </svg>
-                      </span>
-                    </div>
-                  </label>
-                  <input
-                    id="avatarInput"
-                    type="file"
-                    accept="image/jpeg,image/jpg,image/png,image/webp"
-                    onChange={handleAvatarChange}
-                    style={{ display: "none" }}
-                  />
-                  <div>
-                    <h3 style={{ margin: 0 }}>{profile?.name ?? user?.name}</h3>
-                    <span className="cell-sub">{profile?.email ?? user?.email}</span>
-                    <span
-                      className="badge"
-                      style={{
-                        marginTop: 4,
-                        display: "inline-block",
-                        textTransform: "capitalize",
-                      }}
-                    >
-                      {user?.role}
-                    </span>
-                  </div>
-                </div>
+              {avatarSrc ? (
+                <img
+                  src={avatarSrc}
+                  alt="Avatar"
+                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                />
+              ) : (
+                <UserIcon size={44} style={{ color: "var(--muted, #999)" }} />
+              )}
+            </div>
 
-                <div className="field" style={{ marginTop: 14 }}>
-                  <label htmlFor="name">Full name</label>
-                  <input
-                    id="name"
-                    value={name}
-                    onChange={(e) => {
-                      setName(e.target.value);
-                      setNameError("");
-                    }}
-                  />
-                  {nameError && <span className="error-text">{nameError}</span>}
-                </div>
-
-                <div className="field">
-                  <label htmlFor="email">Email</label>
-                  <input id="email" value={profile?.email || user?.email || ""} readOnly />
-                  <span className="hint">Email cannot be changed.</span>
-                </div>
-
-                <div className="field">
-                  <label>Member since</label>
-                  <input value={profile ? formatDate(profile.createdAt) : "-"} readOnly />
-                </div>
-              </div>
-
-              <div className="modal-actions" style={{ marginTop: "auto", paddingTop: 16 }}>
-                <button type="submit" className="btn" disabled={savingName || unchanged}>
-                  {savingName ? "Saving..." : "Save changes"}
-                </button>
-              </div>
-            </form>
-
-            {/* Card 2: Membership Capacity & Status Card */}
-            {user.role === "purchaser" && (
+            <div style={{ flex: 1 }}>
               <div
-                className="card"
-                style={{ display: "flex", flexDirection: "column", height: "100%" }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setIsDragging(true);
+                }}
+                onDragLeave={() => setIsDragging(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setIsDragging(false);
+                  if (e.dataTransfer.files?.length) {
+                    handleFileSelect(e.dataTransfer.files[0]);
+                  }
+                }}
+                style={{
+                  border: isDragging ? "2px dashed var(--primary, #5c6bc0)" : "1.5px dashed var(--border, #ccc)",
+                  borderRadius: 8,
+                  padding: "12px",
+                  textAlign: "center",
+                  background: isDragging ? "var(--soft-2, rgba(92,107,192,0.06))" : "transparent",
+                  cursor: "pointer",
+                }}
+                onClick={() => document.getElementById("avatar-upload-input")?.click()}
               >
-                <div style={{ flex: 1 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                    <h3 style={{ margin: 0 }}>My Membership</h3>
-                    <span
-                      className="badge"
-                      style={{
-                        background:
-                          tier.tier === "ultimate"
-                            ? "linear-gradient(135deg, #f59e0b, #d97706)"
-                            : tier.tier === "premium"
-                            ? "linear-gradient(135deg, #6366f1, #4338ca)"
-                            : "var(--card-bg, #f3f4f6)",
-                        color: tier.tier === "free" ? "#4b5563" : "#fff",
-                        fontWeight: 700,
-                        padding: "4px 10px",
-                      }}
-                    >
-                      {tier.name} Plan
-                    </span>
-                  </div>
+                <input
+                  id="avatar-upload-input"
+                  type="file"
+                  accept="image/*"
+                  style={{ display: "none" }}
+                  onChange={(e) => {
+                    if (e.target.files?.length) {
+                      handleFileSelect(e.target.files[0]);
+                    }
+                  }}
+                />
+                <span style={{ fontSize: "0.85rem", color: "var(--primary, #5c6bc0)", fontWeight: 600 }}>
+                  Upload new photo
+                </span>
+                <span style={{ fontSize: "0.8rem", color: "var(--text-secondary, #666)", display: "block", marginTop: 2 }}>
+                  Drag & drop or click to crop. Max 2MB (JPG, PNG, WebP)
+                </span>
+              </div>
 
-                  <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "0.8rem", color: "#16a34a", fontWeight: 600, marginBottom: 14 }}>
-                    <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#16a34a", display: "inline-block" }}></span>
-                    <span>Active Account • {tier.tier === "free" ? "Free Lifetime Access" : "Active Subscription"}</span>
-                  </div>
-
-                  {/* Meter */}
-                  <div style={{ background: "rgba(92, 107, 192, 0.05)", borderRadius: 8, padding: 12, marginBottom: 14 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "0.82rem", fontWeight: 600, marginBottom: 6 }}>
-                      <span>{tier.tier === "ultimate" ? "Active Books" : "Active Capacity"}</span>
-                      <span style={{ color: totalActiveSlots >= tier.maxBooks && tier.maxBooks !== Infinity ? "#dc2626" : "var(--primary, #5c6bc0)" }}>
-                        {tier.tier === "ultimate"
-                          ? `${activeBooksCount} issued`
-                          : `${totalActiveSlots} / ${tier.maxBooks} slots`}
-                      </span>
-                    </div>
-
-                    {tier.tier !== "ultimate" && (
-                      <div style={{ width: "100%", height: 7, background: "rgba(0,0,0,0.08)", borderRadius: 4, overflow: "hidden" }}>
-                        <div
-                          style={{
-                            height: "100%",
-                            width: `${usagePercentage}%`,
-                            background:
-                              totalActiveSlots >= tier.maxBooks
-                                ? "#ef4444"
-                                : "var(--primary, #5c6bc0)",
-                            borderRadius: 4,
-                            transition: "width 0.3s ease",
-                          }}
-                        />
-                      </div>
-                    )}
-
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "0.75rem", color: "var(--text-secondary, #666)", marginTop: tier.tier === "ultimate" ? 0 : 6 }}>
-                      {tier.tier === "ultimate" ? (
-                        <span style={{ color: "var(--text-secondary, #666)" }}>
-                          Unlimited Borrowing Capacity
-                        </span>
-                      ) : (
-                        <>
-                          <span>{activeBooksCount} issued • {activeRequestsCount} pending</span>
-                          <strong style={{ color: totalActiveSlots >= tier.maxBooks ? "#dc2626" : "#16a34a" }}>
-                            {remainingSlots} request slot(s) left
-                          </strong>
-                        </>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Dates */}
-                  <div style={{ display: "flex", flexDirection: "column", gap: 8, fontSize: "0.85rem", marginBottom: 14 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--primary, #5c6bc0)" }}>
-                        <circle cx="12" cy="12" r="10" />
-                        <polyline points="12 6 12 12 16 14" />
-                      </svg>
-                      <span>
-                        <strong>Reading Window:</strong>{" "}
-                        {tier.tier === "ultimate" ? "All upcoming dates open" : `Up to ${tier.maxIssueDays} days`}
-                      </span>
-                    </div>
-
-                    {user?.membership?.startedAt && tier.tier !== "free" && (
-                      <div style={{ display: "flex", alignItems: "center", gap: 10, color: "#4f46e5" }}>
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-                          <line x1="16" y1="2" x2="16" y2="6" />
-                          <line x1="8" y1="2" x2="8" y2="6" />
-                          <line x1="3" y1="10" x2="21" y2="10" />
-                        </svg>
-                        <span><strong>Started On:</strong> {formatDate(user.membership.startedAt)}</span>
-                      </div>
-                    )}
-
-                    {user?.membership?.expiresAt && tier.tier !== "free" && (
-                      <div style={{ display: "flex", alignItems: "center", gap: 10, color: "#d97706" }}>
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-                          <line x1="16" y1="2" x2="16" y2="6" />
-                          <line x1="8" y1="2" x2="8" y2="6" />
-                          <line x1="3" y1="10" x2="21" y2="10" />
-                        </svg>
-                        <span><strong>Expires:</strong> {formatDate(user.membership.expiresAt)}</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="modal-actions" style={{ marginTop: "auto", paddingTop: 16 }}>
-                  <button
-                    type="button"
-                    className="btn btn-soft"
-                    onClick={() => setShowMembershipModal(true)}
-                    style={{ width: "100%" }}
-                  >
-                    {tier.tier === "ultimate" ? "Your Plan" : "View Plans & Upgrade"}
+              {avatarFile && (
+                <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                  <button type="button" className="btn btn-sm" onClick={saveAvatar}>
+                    Save Photo
+                  </button>
+                  <button type="button" className="btn btn-sm btn-soft" onClick={cancelAvatar}>
+                    Cancel
                   </button>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
 
-          {/* Card 3: Recent 5 Transactions Only */}
-          {user.role === "purchaser" && (
-            <div className="card">
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-                <div>
-                  <h3 style={{ margin: 0, fontSize: "1.1rem" }}>Recent Transactions</h3>
-                  <span style={{ fontSize: "0.82rem", color: "var(--text-secondary, #666)" }}>
-                    Showing your latest 5 billing records.
+          {/* Membership Tier Card (Purchaser Only) */}
+          {user?.role === "purchaser" && (
+            <div
+              className="card"
+              style={{
+                borderLeft: `4px solid ${tier.color}`,
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                flexWrap: "wrap",
+                gap: 16,
+              }}
+            >
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ fontSize: "1.1rem", fontWeight: 700 }}>
+                    {tier.name} Membership
                   </span>
-                </div>
-                {transactions.length > 0 && (
-                  <button
-                    type="button"
-                    className="btn btn-soft btn-sm"
-                    onClick={() => {
-                      setActiveTab("transactions");
-                      setTxPage(1);
+                  <span
+                    className="badge"
+                    style={{
+                      background: `${tier.color}18`,
+                      color: tier.color,
+                      fontWeight: 700,
+                      textTransform: "uppercase",
+                      fontSize: "0.72rem",
                     }}
                   >
-                    View All ({transactions.length}) →
-                  </button>
-                )}
+                    Active
+                  </span>
+                </div>
+                <div style={{ fontSize: "0.85rem", color: "var(--text-secondary, #666)", marginTop: 6 }}>
+                  Book Slots: <strong>{activeBooksCount} / {tier.limits.maxBooks}</strong> active | Request Slots:{" "}
+                  <strong>{activeRequestsCount} / {tier.limits.maxRequests}</strong> active
+                </div>
               </div>
 
-              {loadingTransactions ? (
-                <p className="empty">Loading recent transactions...</p>
-              ) : transactions.length === 0 ? (
-                <p className="empty">No transactions found yet.</p>
-              ) : (
-                <div className="table-wrap">
-                  <table>
+              <button
+                type="button"
+                className="btn btn-soft"
+                onClick={() => setShowMembershipModal(true)}
+                style={{ borderColor: tier.color, color: tier.color }}
+              >
+                Change Tier
+              </button>
+            </div>
+          )}
+
+          {/* Personal Info Form */}
+          <form className="card" onSubmit={saveName} noValidate>
+            <h3 style={{ marginTop: 0, fontSize: "1.15rem" }}>Personal Information</h3>
+
+            <div className="field">
+              <label htmlFor="email">Email address</label>
+              <input
+                id="email"
+                type="email"
+                value={profile?.email || ""}
+                disabled
+                style={{ background: "var(--soft, #f9fafb)", cursor: "not-allowed" }}
+              />
+              <span className="hint">Email address cannot be changed.</span>
+            </div>
+
+            <div className="field">
+              <label htmlFor="role">Account Role</label>
+              <input
+                id="role"
+                type="text"
+                value={profile?.role || ""}
+                disabled
+                style={{
+                  background: "var(--soft, #f9fafb)",
+                  cursor: "not-allowed",
+                  textTransform: "capitalize",
+                }}
+              />
+            </div>
+
+            <div className="field">
+              <label htmlFor="name">Full Name</label>
+              <input
+                id="name"
+                name="name"
+                value={name}
+                onChange={(e) => {
+                  setName(e.target.value);
+                  if (nameError) setNameError("");
+                }}
+                placeholder="Your full name"
+              />
+              {nameError && <span className="error-text">{nameError}</span>}
+            </div>
+
+            <div className="modal-actions" style={{ marginTop: 20 }}>
+              <button
+                type="submit"
+                className="btn"
+                disabled={savingName || !name.trim() || name === profile?.name}
+              >
+                {savingName ? "Saving..." : "Save changes"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* TAB 2: TRANSACTIONS (PAGINATED RECORD)                         */}
+      {/* ============================================================== */}
+      {activeTab === "transactions" && user?.role === "purchaser" && (
+        <div style={{ maxWidth: 800 }}>
+          <div className="card">
+            <h3 style={{ marginTop: 0, fontSize: "1.15rem", marginBottom: 16 }}>
+              Membership Payments & Invoices
+            </h3>
+
+            {loadingTransactions ? (
+              <p className="empty">Loading transactions...</p>
+            ) : transactions.length === 0 ? (
+              <p className="empty">No membership transactions found on your account.</p>
+            ) : (
+              <>
+                <div className="table-responsive">
+                  <table className="table">
                     <thead>
                       <tr>
                         <th>Date</th>
-                        <th>Type / Details</th>
+                        <th>Plan</th>
                         <th>Amount</th>
+                        <th>Payment ID</th>
                         <th>Status</th>
-                        <th>Receipt ID</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {transactions.slice(0, 5).map((tx) => (
+                      {currentTransactions.map((tx) => (
                         <tr key={tx._id}>
-                          <td style={{ whiteSpace: "nowrap" }}>{formatDate(tx.createdAt)}</td>
-                          <td style={{ whiteSpace: "nowrap", textTransform: "capitalize" }}>
-                            {tx.type === "fine" ? (
-                              <span className="badge" style={{ background: "#fee2e2", color: "#b91c1c", fontSize: "0.72rem" }}>
-                                Late Fine {tx.bookTitle ? `• ${tx.bookTitle}` : ""}
-                              </span>
-                            ) : (
-                              <strong>{tx.tier} Plan</strong>
-                            )}
+                          <td>{formatDate(tx.createdAt)}</td>
+                          <td style={{ fontWeight: 600, textTransform: "capitalize" }}>
+                            {tx.plan}
                           </td>
-                          <td style={{ whiteSpace: "nowrap", fontWeight: 600 }}>₹{tx.amount}</td>
-                          <td style={{ whiteSpace: "nowrap" }}>
+                          <td>₹{tx.amount}</td>
+                          <td style={{ fontFamily: "monospace", fontSize: "0.82rem" }}>
+                            {tx.razorpayPaymentId || "-"}
+                          </td>
+                          <td>
                             <span
-                              className={`badge ${
-                                tx.status === "success"
-                                  ? "badge-success"
-                                  : tx.status === "failed"
-                                  ? "badge-danger"
-                                  : "badge-warning"
-                              }`}
-                              style={{ textTransform: "capitalize" }}
+                              className="badge"
+                              style={{
+                                background: tx.status === "captured" ? "#dcfce7" : "#fee2e2",
+                                color: tx.status === "captured" ? "#166534" : "#991b1b",
+                                textTransform: "uppercase",
+                                fontSize: "0.72rem",
+                                fontWeight: 700,
+                              }}
                             >
                               {tx.status}
                             </span>
-                          </td>
-                          <td style={{ whiteSpace: "nowrap", fontSize: "0.82rem", color: "var(--text-secondary, #666)" }}>
-                            {tx.paymentId || tx.orderId}
                           </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
 
-      {/* ============================================================== */}
-      {/* TAB 2: FULL TRANSACTION HISTORY (WITH PAGINATION)              */}
-      {/* ============================================================== */}
-      {activeTab === "transactions" && user.role === "purchaser" && (
-        <div className="card">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
-            <div>
-              <h3 style={{ margin: 0, fontSize: "1.2rem" }}>All Transaction Records</h3>
-              <p style={{ margin: "2px 0 0 0", fontSize: "0.85rem", color: "var(--text-secondary, #666)" }}>
-                Complete archive of your membership upgrades, renewals, and late fine settlements.
-              </p>
-            </div>
-            <span className="badge" style={{ background: "rgba(99, 102, 241, 0.1)", color: "#4f46e5", fontWeight: 600, padding: "4px 12px" }}>
-              Total: {transactions.length} record(s)
-            </span>
-          </div>
-
-          {loadingTransactions ? (
-            <p className="empty">Loading transactions...</p>
-          ) : transactions.length === 0 ? (
-            <p className="empty">No payment transactions found.</p>
-          ) : (
-            <>
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th style={{ whiteSpace: "nowrap" }}>Date</th>
-                      <th style={{ whiteSpace: "nowrap" }}>Type / Details</th>
-                      <th style={{ whiteSpace: "nowrap" }}>Amount</th>
-                      <th style={{ whiteSpace: "nowrap" }}>Status</th>
-                      <th style={{ whiteSpace: "nowrap" }}>Validity / Purpose</th>
-                      <th style={{ whiteSpace: "nowrap" }}>Transaction ID</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {paginatedTransactions.map((tx) => (
-                      <tr key={tx._id}>
-                        <td style={{ whiteSpace: "nowrap" }}>{formatDate(tx.createdAt)}</td>
-
-                        <td style={{ whiteSpace: "nowrap", textTransform: "capitalize" }}>
-                          {tx.type === "fine" ? (
-                            <div>
-                              <span
-                                className="badge"
-                                style={{
-                                  background: "#fee2e2",
-                                  color: "#b91c1c",
-                                  fontSize: "0.72rem",
-                                  padding: "2px 8px",
-                                  fontWeight: 700,
-                                }}
-                              >
-                                Late Fine
-                              </span>
-                              {tx.bookTitle && (
-                                <div style={{ fontSize: "0.75rem", color: "var(--text-secondary, #666)", marginTop: 2 }}>
-                                  {tx.bookTitle}
-                                </div>
-                              )}
-                            </div>
-                          ) : (
-                            <strong>{tx.tier} Plan</strong>
-                          )}
-                        </td>
-
-                        <td style={{ whiteSpace: "nowrap", fontWeight: 600 }}>₹{tx.amount}</td>
-
-                        <td style={{ whiteSpace: "nowrap" }}>
-                          <span
-                            className={`badge ${
-                              tx.status === "success"
-                                ? "badge-success"
-                                : tx.status === "failed"
-                                ? "badge-danger"
-                                : "badge-warning"
-                            }`}
-                            style={{ textTransform: "capitalize" }}
-                          >
-                            {tx.status}
-                          </span>
-                        </td>
-
-                        <td style={{ whiteSpace: "nowrap" }}>
-                          {tx.type === "fine" ? (
-                            <span style={{ fontSize: "0.8rem", color: "#16a34a", fontWeight: 600 }}>
-                              Fine Settled
-                            </span>
-                          ) : tx.startDate && tx.endDate ? (
-                            <span>
-                              {formatDate(tx.startDate)} &rarr; {formatDate(tx.endDate)}
-                            </span>
-                          ) : (
-                            "-"
-                          )}
-                        </td>
-
-                        <td style={{ whiteSpace: "nowrap", fontSize: "0.82rem", color: "var(--text-secondary, #666)" }}>
-                          {tx.paymentId || tx.orderId}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              {/* Pagination Controls */}
-              {totalTxPages > 1 && (
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    marginTop: 18,
-                    paddingTop: 12,
-                    borderTop: "1px solid var(--border, #e5e7eb)",
-                    flexWrap: "wrap",
-                    gap: 12,
-                  }}
-                >
-                  <span style={{ fontSize: "0.85rem", color: "var(--text-secondary, #666)" }}>
-                    Showing {(txPage - 1) * txPerPage + 1} to{" "}
-                    {Math.min(txPage * txPerPage, transactions.length)} of {transactions.length} records
-                  </span>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <button
-                      type="button"
-                      className="btn btn-soft btn-sm"
-                      disabled={txPage === 1}
-                      onClick={() => setTxPage((p) => Math.max(1, p - 1))}
-                    >
-                      Previous
-                    </button>
-                    <span style={{ fontSize: "0.85rem", fontWeight: 600, padding: "0 6px" }}>
-                      Page {txPage} of {totalTxPages}
+                {totalPages > 1 && (
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      marginTop: 16,
+                      paddingTop: 12,
+                      borderTop: "1px solid var(--border, #f1f5f9)",
+                    }}
+                  >
+                    <span style={{ fontSize: "0.82rem", color: "var(--text-secondary, #666)" }}>
+                      Page {txPage} of {totalPages}
                     </span>
-                    <button
-                      type="button"
-                      className="btn btn-soft btn-sm"
-                      disabled={txPage >= totalTxPages}
-                      onClick={() => setTxPage((p) => Math.min(totalTxPages, p + 1))}
-                    >
-                      Next
-                    </button>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-soft"
+                        onClick={() => setTxPage((p) => Math.max(1, p - 1))}
+                        disabled={txPage === 1}
+                      >
+                        Previous
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-soft"
+                        onClick={() => setTxPage((p) => Math.min(totalPages, p + 1))}
+                        disabled={txPage === totalPages}
+                      >
+                        Next
+                      </button>
+                    </div>
                   </div>
-                </div>
-              )}
-            </>
-          )}
+                )}
+              </>
+            )}
+          </div>
         </div>
       )}
 
       {/* ============================================================== */}
-      {/* TAB 3: SETTINGS (CHANGE PASSWORD & DANGER ZONE)                */}
+      {/* TAB 3: SETTINGS (NOTIFICATIONS, PASSWORD & DANGER ZONE)         */}
       {/* ============================================================== */}
       {activeTab === "settings" && (
         <div style={{ maxWidth: 580, display: "flex", flexDirection: "column", gap: 20 }}>
+          {/* Notification Preferences */}
+          <div
+            className="card"
+            style={{
+              background: "var(--surface, #ffffff)",
+              padding: "20px 24px",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 20,
+            }}
+          >
+            <div style={{ flex: 1, minWidth: 240 }}>
+              <h3 style={{ margin: "0 0 6px 0", fontSize: "1.05rem", fontWeight: 700, color: "var(--text, #111827)" }}>
+                Desktop Notification Pop-ups
+              </h3>
+              <p style={{ margin: 0, fontSize: "0.85rem", color: "var(--text-secondary, #6b7280)", lineHeight: 1.45 }}>
+                Show pop-up banner alerts on your screen when new updates arrive. When turned off, notifications will quietly appear only in the notification bell.
+              </p>
+            </div>
+            <label
+              style={{
+                position: "relative",
+                display: "inline-block",
+                width: 48,
+                height: 26,
+                flexShrink: 0,
+                cursor: "pointer",
+              }}
+              title={notificationPopups ? "Click to disable pop-ups" : "Click to enable pop-ups"}
+            >
+              <input
+                type="checkbox"
+                checked={notificationPopups}
+                onChange={handleToggleNotificationPopups}
+                style={{ opacity: 0, width: 0, height: 0, position: "absolute" }}
+              />
+              <span
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  backgroundColor: notificationPopups ? "var(--primary, #5c6bc0)" : "#d1d5db",
+                  transition: "0.2s",
+                  borderRadius: 26,
+                }}
+              />
+              <span
+                style={{
+                  position: "absolute",
+                  height: 20,
+                  width: 20,
+                  left: notificationPopups ? 25 : 3,
+                  bottom: 3,
+                  backgroundColor: "#ffffff",
+                  transition: "0.2s",
+                  borderRadius: "50%",
+                  boxShadow: "0 1px 3px rgba(0,0,0,0.2)",
+                }}
+              />
+            </label>
+          </div>
+
+          {/* Security & Password Form */}
           <form className="card" onSubmit={savePw} noValidate>
             <h3 style={{ marginTop: 0, fontSize: "1.15rem" }}>Security & Password</h3>
             <p style={{ margin: "0 0 16px 0", fontSize: "0.85rem", color: "var(--text-secondary, #666)" }}>
@@ -967,7 +807,6 @@ export default function Profile() {
                 }}
                 onMouseLeave={(e) => {
                   e.currentTarget.style.background = "transparent";
-                  e.currentTarget.style.color = "#dc2626";
                 }}
               >
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
