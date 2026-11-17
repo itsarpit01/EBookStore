@@ -2,10 +2,51 @@ import Issue from "../models/Issue.js";
 import User from "../models/User.js";
 import { calcFine } from "../utils/fine.js";
 import { sendNotification } from "../controllers/notificationController.js";
+import { sendDueDateReminderEmail } from "../utils/mailer.js";
 
 const formatDateStr = (date) => (date ? new Date(date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "");
 
-// 1. Check books due tomorrow (24h reminder)
+// 1. Check books due in 2 days (48h reminder) & send interactive reminder email
+const checkTwoDayDueReminders = async () => {
+  try {
+    const now = new Date();
+    // 48 hours window: between 24h from now and 48h from now
+    const windowStart = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+    const windowEnd = new Date(now.getTime() + 48 * 60 * 60 * 1000);
+
+    const upcomingIssues = await Issue.find({
+      status: "issued",
+      dueDate: { $gte: windowStart, $lte: windowEnd },
+    }).populate("book member");
+
+    for (const issue of upcomingIssues) {
+      if (issue.member?.email && issue.book) {
+        // Send email with interactive Reissue & Return buttons
+        await sendDueDateReminderEmail({
+          to: issue.member.email,
+          name: issue.member.name,
+          bookTitle: issue.book.title,
+          dueDate: issue.dueDate,
+          issueId: issue._id,
+        });
+
+        // Also add in-app bell notification
+        await sendNotification({
+          userId: issue.member._id,
+          title: "Book Due in 2 Days",
+          message: `Reminder: "${issue.book.title}" is due on ${formatDateStr(issue.dueDate)}. You can reissue or return it now.`,
+          type: "warning",
+          link: `/purchaser/my-issues`,
+        });
+      }
+    }
+    console.log(`[Recurring] Checked 2-day due reminders: sent ${upcomingIssues.length} reminder(s)`);
+  } catch (err) {
+    console.error("[Recurring] checkTwoDayDueReminders error:", err);
+  }
+};
+
+// 2. Check books due tomorrow (24h reminder)
 const checkUpcomingDueDates = async () => {
   try {
     const now = new Date();
@@ -34,7 +75,7 @@ const checkUpcomingDueDates = async () => {
   }
 };
 
-// 2. Check overdue books & sync daily fines
+// 3. Check overdue books & sync daily fines
 const checkOverdueBooksAndFines = async () => {
   try {
     const now = new Date();
@@ -66,7 +107,7 @@ const checkOverdueBooksAndFines = async () => {
   }
 };
 
-// 3. Check membership plans expiry
+// 4. Check membership plans expiry
 const checkMembershipExpiries = async () => {
   try {
     const now = new Date();
@@ -101,6 +142,7 @@ export const startRecurringJobs = () => {
 
   const runAllJobs = async () => {
     console.log("[Recurring] Running scheduled recurring checks...");
+    await checkTwoDayDueReminders();
     await checkUpcomingDueDates();
     await checkOverdueBooksAndFines();
     await checkMembershipExpiries();

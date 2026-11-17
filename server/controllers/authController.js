@@ -3,7 +3,7 @@ import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import User from "../models/User.js";
 import PasswordReset from "../models/PasswordReset.js";
-import { sendOtpEmail } from "../utils/mailer.js";
+import { sendOtpEmail, sendWelcomeEmail } from "../utils/mailer.js";
 
 const generateToken = (user) => {
   return jwt.sign(
@@ -54,6 +54,11 @@ export const register = async (req, res) => {
       password: hashedPassword,
       role: "purchaser",
     });
+
+    // ── NEW: Trigger Welcome Email in background ──
+    sendWelcomeEmail(user.email, user.name).catch((err) =>
+      console.error("[Auth] Welcome email error:", err.message)
+    );
 
     res.status(201).json({ user: publicUser(user) });
   } catch (error) {

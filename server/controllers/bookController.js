@@ -2,7 +2,9 @@ import fs from "fs";
 import path from "path";
 import Book from "../models/Book.js";
 import Issue from "../models/Issue.js";
+import User from "../models/User.js";
 import { bookQuerySchema } from "../validators/bookQueryValidator.js";
+import { sendNewBookAlertEmail, sendBookDiscontinuedEmail } from "../utils/mailer.js";
 
 const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -82,6 +84,19 @@ export const createBook = async (req, res) => {
   if (req.file) bookData.coverImage = `/uploads/books/${req.file.filename}`;
 
   const book = await Book.create(bookData);
+
+  // ── NEW: Broadcast email to all registered & active members ──
+  (async () => {
+    try {
+      const activeMembers = await User.find({ role: "purchaser" }).select("name email");
+      if (activeMembers && activeMembers.length > 0) {
+        await sendNewBookAlertEmail(activeMembers, book);
+      }
+    } catch (err) {
+      console.error("[Book] New book alert broadcast failed:", err.message);
+    }
+  })();
+
   res.status(201).json(book);
 };
 
@@ -141,4 +156,69 @@ export const deleteBook = async (req, res) => {
 
   removeFile(book.coverImage);
   res.json({ message: "Book deleted successfully" });
+};
+
+// PATCH /api/books/:id/discontinue (librarian)
+// ── NEW FEATURE: Discontinue book with mandatory date, optional reason & 7-day grace return window ──
+export const discontinueBook = async (req, res) => {
+  try {
+    const { effectiveDate, reason } = req.body;
+
+    if (!effectiveDate) {
+      return res.status(400).json({ message: "Discontinuation effective date is mandatory" });
+    }
+
+    const book = await Book.findById(req.params.id);
+    if (!book) {
+      return res.status(404).json({ message: "Book not found" });
+    }
+
+    // Mark book as discontinued
+    book.isDiscontinued = true;
+    book.discontinueReason = reason ? reason.trim() : "Catalog retirement";
+    book.discontinuedDate = new Date(effectiveDate);
+    // Discontinued books cannot accept new issues
+    book.availableCopies = 0;
+    await book.save();
+
+    // Find all actively issued copies
+    const activeIssues = await Issue.find({
+      book: book._id,
+      status: "issued",
+    }).populate("member", "name email");
+
+    const now = new Date();
+    const oneWeekDeadline = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000); // exactly 7 days from today
+
+    const notifiedMembers = [];
+
+    for (const issue of activeIssues) {
+      // Set new due date to 1 week from today
+      issue.dueDate = oneWeekDeadline;
+      await issue.save();
+
+      // Send discontinuation email strictly to this user
+      if (issue.member?.email) {
+        notifiedMembers.push(issue.member.email);
+        sendBookDiscontinuedEmail({
+          to: issue.member.email,
+          name: issue.member.name,
+          bookTitle: book.title,
+          reason: book.discontinueReason,
+          effectiveDate: book.discontinuedDate,
+          newDueDate: oneWeekDeadline,
+        }).catch((err) =>
+          console.error(`[Book] Discontinue email failed for ${issue.member.email}:`, err.message)
+        );
+      }
+    }
+
+    res.json({
+      message: `Book marked as discontinued. ${activeIssues.length} active borrower(s) notified with a 7-day return deadline.`,
+      book,
+      affectedBorrowersCount: activeIssues.length,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
 };

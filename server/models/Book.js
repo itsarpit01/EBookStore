@@ -10,12 +10,17 @@ const bookSchema = new mongoose.Schema(
     totalCopies: { type: Number, required: true, min: 1, default: 1 },
     availableCopies: { type: Number, min: 0 },
     coverImage: { type: String, default: "" },
+    
+    // ── Discontinuation Feature Fields ──
+    isDiscontinued: { type: Boolean, default: false },
+    discontinueReason: { type: String, default: "", trim: true },
+    discontinuedDate: { type: Date, default: null },
   },
   { timestamps: true }
 );
 
-
 bookSchema.index({ category: 1 });
 bookSchema.index({ createdAt: -1 });
+bookSchema.index({ isDiscontinued: 1 });
 
 export default mongoose.model("Book", bookSchema);
