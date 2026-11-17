@@ -67,6 +67,7 @@ export default function PurchaserSupport() {
         }
       });
       setErrors(fieldErrors);
+      toast.error("Please fill in all required fields properly");
       return;
     }
 
@@ -83,6 +84,9 @@ export default function PurchaserSupport() {
       setSubmitting(false);
     }
   };
+
+  // Form input validation check for submit button
+  const isFormEmpty = !form.subject.trim() || !form.message.trim();
 
   return (
     <>
@@ -291,7 +295,15 @@ export default function PurchaserSupport() {
                 >
                   Cancel
                 </button>
-                <button type="submit" className="btn" disabled={submitting}>
+                <button
+                  type="submit"
+                  className="btn"
+                  disabled={submitting || isFormEmpty}
+                  style={{
+                    opacity: isFormEmpty ? 0.6 : 1,
+                    cursor: isFormEmpty ? "not-allowed" : "pointer",
+                  }}
+                >
                   {submitting ? "Submitting..." : "Submit Ticket"}
                 </button>
               </div>
