@@ -3,7 +3,8 @@ import api from "../api/axios";
 import { useToast } from "../context/ToastContext";
 import { getErrorMessage } from "../utils/errors";
 import { formatDate } from "../utils/format";
-import { PlusIcon, CloseIcon } from "../components/Icons";
+import { PlusIcon, CloseIcon, TrashIcon } from "../components/Icons";
+import ConfirmModal from "../components/ConfirmModal";
 import { ticketSchema } from "../schemas/ticketSchema";
 
 const initialForm = { subject: "", category: "general", message: "" };
@@ -16,6 +17,10 @@ export default function PurchaserSupport() {
   const [form, setForm] = useState(initialForm);
   const [errors, setErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
+
+  // Delete State
+  const [ticketToDelete, setTicketToDelete] = useState(null);
+  const [deleting, setDeleting] = useState(false);
 
   const fetchTickets = async () => {
     try {
@@ -85,7 +90,21 @@ export default function PurchaserSupport() {
     }
   };
 
-  // Form input validation check for submit button
+  const handleDeleteTicket = async () => {
+    if (!ticketToDelete) return;
+    try {
+      setDeleting(true);
+      await api.delete(`/tickets/${ticketToDelete._id}`);
+      toast.success("Support ticket deleted successfully");
+      setTicketToDelete(null);
+      fetchTickets();
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const isFormEmpty = !form.subject.trim() || !form.message.trim();
 
   return (
@@ -161,19 +180,55 @@ export default function PurchaserSupport() {
                   </span>
                 </div>
 
-                <span
-                  className="badge"
-                  style={{
-                    background: t.status === "resolved" ? "#dcfce7" : "#fef3c7",
-                    color: t.status === "resolved" ? "#166534" : "#92400e",
-                    fontWeight: 700,
-                    textTransform: "uppercase",
-                    fontSize: "0.72rem",
-                    padding: "3px 10px",
-                  }}
-                >
-                  {t.status === "resolved" ? "Resolved" : "Pending Review"}
-                </span>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span
+                    className="badge"
+                    style={{
+                      background: t.status === "resolved" ? "#dcfce7" : "#fef3c7",
+                      color: t.status === "resolved" ? "#166534" : "#92400e",
+                      fontWeight: 700,
+                      textTransform: "uppercase",
+                      fontSize: "0.72rem",
+                      padding: "3px 10px",
+                    }}
+                  >
+                    {t.status === "resolved" ? "Resolved" : "Pending Review"}
+                  </span>
+
+                  {/* Delete Button: Only shown if ticket is still open/pending */}
+                  {t.status === "open" && (
+                    <button
+                      type="button"
+                      onClick={() => setTicketToDelete(t)}
+                      style={{
+                        background: "transparent",
+                        border: "1px solid var(--border, #e5e7eb)",
+                        color: "#dc2626",
+                        cursor: "pointer",
+                        padding: "4px 8px",
+                        borderRadius: 6,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 4,
+                        fontSize: "0.78rem",
+                        fontWeight: 600,
+                        transition: "all 0.15s ease",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = "#fee2e2";
+                        e.currentTarget.style.borderColor = "#dc2626";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = "transparent";
+                        e.currentTarget.style.borderColor = "var(--border, #e5e7eb)";
+                      }}
+                      title="Delete this open concern"
+                    >
+                      <TrashIcon size={13} />
+                      <span>Delete</span>
+                    </button>
+                  )}
+                </div>
               </div>
 
               <p style={{ margin: "0 0 12px 0", fontSize: "0.9rem", color: "var(--text, #333)", lineHeight: 1.5 }}>
@@ -310,6 +365,19 @@ export default function PurchaserSupport() {
             </form>
           </div>
         </div>
+      )}
+
+      {/* Confirmation Modal: Delete Open Ticket */}
+      {ticketToDelete && (
+        <ConfirmModal
+          title="Delete Support Concern"
+          message={`Are you sure you want to delete your ticket "${ticketToDelete.subject}"? This action cannot be undone.`}
+          confirmText="Delete Concern"
+          danger
+          loading={deleting}
+          onClose={() => setTicketToDelete(null)}
+          onConfirm={handleDeleteTicket}
+        />
       )}
     </>
   );

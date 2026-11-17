@@ -108,3 +108,24 @@ export const resolveTicket = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
+// DELETE /api/tickets/:id (Purchaser: Delete own open ticket before resolution)
+export const deleteTicket = async (req, res) => {
+  try {
+    const ticket = await Ticket.findOne({ _id: req.params.id, user: req.user.id });
+    if (!ticket) {
+      return res.status(404).json({ message: "Ticket not found" });
+    }
+
+    // Safety check: Cannot delete if already resolved
+    if (ticket.status !== "open") {
+      return res.status(400).json({
+        message: "Cannot delete a ticket that has already been resolved by staff",
+      });
+    }
+
+    await Ticket.findByIdAndDelete(req.params.id);
+    res.json({ message: "Ticket deleted successfully" });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
