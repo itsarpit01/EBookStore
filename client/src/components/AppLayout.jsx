@@ -32,14 +32,14 @@ const NAV = {
     { to: "/librarian/issues", label: "Issue / Return", icon: IssueIcon },
     { to: "/librarian/requests", label: "Requests", icon: RequestIcon },
     { to: "/librarian/users", label: "Members", icon: UserIcon || DashboardIcon },
-       { to: "/librarian/support", label: "Support Tickets", icon: SupportIcon },
+    { to: "/librarian/support", label: "Support Tickets", icon: SupportIcon },
   ],
   purchaser: [
     { to: "/purchaser", label: "Dashboard", icon: DashboardIcon, end: true },
     { to: "/purchaser/books", label: "Browse Books", icon: BookIcon },
     { to: "/purchaser/my-issues", label: "My Issues", icon: IssueIcon },
     { to: "/purchaser/requests", label: "My Requests", icon: RequestIcon },
-     { to: "/purchaser/support", label: "Help & Support", icon: SupportIcon },
+    { to: "/purchaser/support", label: "Help & Support", icon: SupportIcon },
   ],
 };
 
@@ -62,7 +62,15 @@ export default function AppLayout() {
   const [sidebarCapacity, setSidebarCapacity] = useState({ active: 0, pending: 0 });
 
   const links = NAV[user?.role] || [];
-  const avatarSrc = user?.avatar ? `${SERVER_URL}${user.avatar}` : null;
+
+  // ── FIX: Google External Avatar vs Local Uploaded Avatar ──────────────────
+  const avatarSrc = user?.avatar
+    ? user.avatar.startsWith("http")
+      ? user.avatar
+      : `${SERVER_URL}${user.avatar.startsWith("/") ? "" : "/"}${user.avatar}`
+    : null;
+  // ──────────────────────────────────────────────────────────────────────────
+
   const tier = getEffectiveTier(user);
 
   useEffect(() => {
@@ -286,6 +294,7 @@ export default function AppLayout() {
                     className="avatar"
                     src={avatarSrc}
                     alt=""
+                    referrerPolicy="no-referrer"
                     onError={() => setAvatarBroken(true)}
                     style={{ width: 34, height: 34, borderRadius: "50%", objectFit: "cover" }}
                   />
