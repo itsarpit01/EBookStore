@@ -33,11 +33,20 @@ router.get("/me", protect, me);
 router.post("/forgot-password", forgotLimiter, validate(forgotPasswordSchema), forgotPassword);
 router.post("/reset-password", resetLimiter, validate(resetPasswordSchema), resetPassword);
 
-// ── In-Memory Used Codes Lock (Prevents Browser Double-Hit Replay) ────────────
+// ── In-Memory Used Codes Lock (Prevents Duplicate Request Collisions) ─────────
 const usedCodes = new Set();
+
+// Helper to safely get single clean client URL even if .env has comma-separated list
+const getClientUrl = () => {
+  const raw = process.env.CLIENT_URL || "http://localhost:5173";
+  return raw.split(",")[0].trim() || "http://localhost:5173";
+};
 
 // ── 1. Google OAuth Initiate Route ──────────────────────────────────────────
 router.get("/google", (req, res) => {
+  // Fix for 'about:blank#blocked': Helmet ke Cross-Origin-Opener-Policy ko bypass karta hai
+  res.setHeader("Cross-Origin-Opener-Policy", "unsafe-none");
+
   const clientId = (process.env.GOOGLE_CLIENT_ID || "").trim();
   const redirectUri = "http://localhost:5000/api/auth/google/callback";
 
@@ -47,30 +56,35 @@ router.get("/google", (req, res) => {
   authUrl.searchParams.set("response_type", "code");
   authUrl.searchParams.set("scope", "openid email profile");
   authUrl.searchParams.set("access_type", "offline");
+  // 🔥 HAR BAAR GOOGLE ACCOUNT SELECTOR DIKHAYEGA:
   authUrl.searchParams.set("prompt", "select_account");
 
   res.redirect(authUrl.toString());
 });
 
-// ── 2. Google OAuth Direct Token Exchange Callback ──────────────────────────
+// ── 2. Google OAuth Direct Token Exchange Callback ─────────────────────────
 router.get("/google/callback", async (req, res) => {
+  res.setHeader("Cross-Origin-Opener-Policy", "unsafe-none");
+
   const { code, error, error_description } = req.query;
+  const clientUrl = getClientUrl();
 
   if (error) {
     console.error("Google Auth error:", error, error_description);
-    return res.redirect("http://localhost:5173/login?error=google_cancelled");
+    return res.redirect(`${clientUrl}/login?error=google_cancelled`);
   }
 
   if (!code) {
-    return res.redirect("http://localhost:5173/login?error=no_code");
+    return res.redirect(`${clientUrl}/login?error=no_code`);
   }
 
   const codeStr = String(code).trim();
 
-  // 🛡️ DEDUP LOCK: Agar browser extension ne same code double-hit kiya, toh ignore duplicate
+  // 🛡️ DEDUP LOCK: Agar browser extension ne same code dobara hit kiya,
+  // 204 No Content bhej kar silently close karenge taaki Chrome me ERR_INVALID_REDIRECT na aaye.
   if (usedCodes.has(codeStr)) {
-    console.log("⚠️ Duplicate code hit detected from browser extension. Redirecting smoothly...");
-    return res.redirect("http://localhost:5173/purchaser");
+    console.log("⚠️ Duplicate code hit handled silently (204).");
+    return res.status(204).end();
   }
   usedCodes.add(codeStr);
   setTimeout(() => usedCodes.delete(codeStr), 60 * 1000); // 1 min memory cleanup
@@ -101,7 +115,7 @@ router.get("/google/callback", async (req, res) => {
 
     if (!tokenRes.ok) {
       console.error("❌ TOKEN FAILED:", tokenData);
-      return res.redirect("http://localhost:5173/login?error=auth_failed");
+      return res.redirect(`${clientUrl}/login?error=auth_failed`);
     }
 
     console.log("🎉 SUCCESS! TOKEN RECEIVED for:", clientId.slice(-10));
@@ -123,10 +137,12 @@ router.get("/google/callback", async (req, res) => {
     if (!user) {
       user = await User.findOne({ email });
       if (user) {
+        // Purana user tha (email matched): Google ID & fresh Google photo update karo
         user.googleId = googleId;
-        if (!user.avatar && avatar) user.avatar = avatar;
+        if (avatar) user.avatar = avatar;
         await user.save();
       } else {
+        // Naya fresh user create karo
         user = await User.create({
           name,
           email,
@@ -135,13 +151,19 @@ router.get("/google/callback", async (req, res) => {
           role: "purchaser",
         });
       }
+    } else {
+      // User pehle se Google ID se tha: agar avatar change hua ya purana broken tha to fresh avatar update karo
+      if (avatar && user.avatar !== avatar) {
+        user.avatar = avatar;
+        await user.save();
+      }
     }
 
     req.user = user;
     return googleCallback(req, res);
   } catch (err) {
     console.error("Server exception:", err);
-    return res.redirect("http://localhost:5173/login?error=server_error");
+    return res.redirect(`${clientUrl}/login?error=server_error`);
   }
 });
 

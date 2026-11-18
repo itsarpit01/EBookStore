@@ -25,8 +25,13 @@ const app = express();
 
 // Railway / Render reverse proxy ke piche secure cookies aur rate limiting ke liye zaroori
 app.set("trust proxy", 1);
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+    crossOriginOpenerPolicy: false, // Required so Google OAuth redirect is not blocked by Chrome
+  })
+);
 
-app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 
 // Deploy-ready CORS: localhost aur live client domain dono allow karega
 const allowedOrigins = [

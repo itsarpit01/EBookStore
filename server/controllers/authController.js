@@ -209,6 +209,7 @@ export const resetPassword = async (req, res) => {
 };
 
 // GET /api/auth/google/callback
+// GET /api/auth/google/callback
 export const googleCallback = (req, res) => {
   const clientUrl = process.env.CLIENT_URL || "http://localhost:5173";
 
@@ -219,7 +220,33 @@ export const googleCallback = (req, res) => {
 
     const token = generateToken(req.user);
     res.cookie("token", token, cookieOptions);
-    res.redirect(clientUrl);
+
+    const targetUrl =
+      req.user.role === "librarian"
+        ? `${clientUrl}/librarian`
+        : `${clientUrl}/purchaser`;
+
+    // 200 OK HTML Bridge: Prevents Chrome ERR_INVALID_REDIRECT & gives instant smooth transition
+    res.setHeader("Content-Type", "text/html");
+    return res.send(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="utf-8">
+          <meta http-equiv="refresh" content="0; url=${targetUrl}">
+          <title>Signing in...</title>
+        </head>
+        <body style="margin:0;background:#0f172a;color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;">
+          <div style="text-align:center;">
+            <div style="width:36px;height:36px;border:3px solid rgba(255,255,255,0.15);border-top-color:#6366f1;border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto 14px;"></div>
+            <p style="font-size:15px;font-weight:500;margin:0 0 4px;">Signing you in...</p>
+            <p style="font-size:12px;color:#94a3b8;margin:0;">Redirecting to your dashboard</p>
+          </div>
+          <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
+          <script>window.location.replace("${targetUrl}");</script>
+        </body>
+      </html>
+    `);
   } catch (error) {
     console.error("Google callback error:", error);
     res.redirect(`${clientUrl}/login?error=server_error`);

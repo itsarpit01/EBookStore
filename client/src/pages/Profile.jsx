@@ -37,6 +37,7 @@ export default function Profile() {
 
   const [avatarFile, setAvatarFile] = useState(null);
   const [avatarPreview, setAvatarPreview] = useState(null);
+  const [avatarBroken, setAvatarBroken] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
 
   const [rawAvatarSrc, setRawAvatarSrc] = useState(null);
@@ -61,7 +62,7 @@ export default function Profile() {
   const [pwFormError, setPwFormError] = useState("");
   const [savingPw, setSavingPw] = useState(false);
 
-  // ── NEW: Desktop notification pop-ups preference (localStorage) ──────────
+  // ── Desktop notification pop-ups preference (localStorage) ──────────
   const [notificationPopups, setNotificationPopups] = useState(() => {
     return localStorage.getItem("library_notification_popups") !== "false";
   });
@@ -140,6 +141,7 @@ export default function Profile() {
   const handleCropComplete = (croppedFile) => {
     setAvatarFile(croppedFile);
     setAvatarPreview(URL.createObjectURL(croppedFile));
+    setAvatarBroken(false);
     setShowCropper(false);
   };
 
@@ -201,6 +203,7 @@ export default function Profile() {
       setProfile(res.data);
       updateUser(res.data);
       setAvatarFile(null);
+      setAvatarBroken(false);
       toast.success("Profile updated");
     } catch (err) {
       setNameError(getErrorMessage(err));
@@ -249,8 +252,16 @@ export default function Profile() {
     }
   };
 
-  const avatarSrc = avatarPreview || (profile?.avatar ? `${SERVER_URL}${profile.avatar}` : null);
+  // ── FIX: Google External Avatar vs Local Uploaded Avatar ──────────────────
+  const resolveAvatar = (src) => {
+    if (!src) return null;
+    if (src.startsWith("http") || src.startsWith("blob:") || src.startsWith("data:")) return src;
+    return `${SERVER_URL}${src.startsWith("/") ? "" : "/"}${src}`;
+  };
+
+  const avatarSrc = avatarPreview || resolveAvatar(profile?.avatar || user?.avatar);
   const unchanged = name.trim() === (profile?.name ?? user?.name) && !avatarFile;
+  // ──────────────────────────────────────────────────────────────────────────
 
   // Active Capacity Math
   const totalActiveSlots = activeBooksCount + activeRequestsCount;
@@ -405,11 +416,13 @@ export default function Profile() {
                     title="Click or drag and drop image here"
                   >
                     <div style={{ pointerEvents: "none" }}>
-                      {avatarSrc ? (
+                      {avatarSrc && !avatarBroken ? (
                         <img
                           className="avatar avatar-lg"
                           src={avatarSrc}
-                          alt="avatar"
+                          alt=""
+                          referrerPolicy="no-referrer"
+                          onError={() => setAvatarBroken(true)}
                           style={{ width: 64, height: 64, borderRadius: "50%", objectFit: "cover" }}
                         />
                       ) : (
@@ -863,7 +876,7 @@ export default function Profile() {
       {activeTab === "settings" && (
         <div style={{ maxWidth: 580, display: "flex", flexDirection: "column", gap: 20 }}>
 
-          {/* ── NEW: Desktop Notification Pop-ups Toggle Card ──────────── */}
+          {/* ── Desktop Notification Pop-ups Toggle Card ──────────── */}
           <div
             className="card"
             style={{
