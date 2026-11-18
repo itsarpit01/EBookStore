@@ -4,9 +4,9 @@ import User from "../models/User.js";
 
 const clientID = (process.env.GOOGLE_CLIENT_ID || "").trim();
 const clientSecret = (process.env.GOOGLE_CLIENT_SECRET || "").trim();
-const callbackURL = (
-  process.env.GOOGLE_CALLBACK_URL || "http://localhost:5000/api/auth/google/callback"
-).trim();
+const callbackURL = (process.env.GOOGLE_CALLBACK_URL || "http://localhost:5000/api/auth/google/callback").trim();
+
+console.log("[Passport] Google OAuth Initializing with Client ID ending in:", clientID.slice(-10));
 
 passport.use(
   new GoogleStrategy(
@@ -14,7 +14,6 @@ passport.use(
       clientID,
       clientSecret,
       callbackURL,
-      proxy: true,
     },
     async (accessToken, refreshToken, profile, done) => {
       try {
@@ -27,24 +26,17 @@ passport.use(
           return done(new Error("No email found from Google account"), null);
         }
 
-        // 1. Agar user googleId se pehle se exist karta hai -> return user
         let user = await User.findOne({ googleId });
-        if (user) {
-          return done(null, user);
-        }
+        if (user) return done(null, user);
 
-        // 2. Agar user email se pehle registered tha -> link googleId & avatar
         user = await User.findOne({ email });
         if (user) {
           user.googleId = googleId;
-          if (!user.avatar && avatar) {
-            user.avatar = avatar;
-          }
+          if (!user.avatar && avatar) user.avatar = avatar;
           await user.save();
           return done(null, user);
         }
 
-        // 3. Agar bilkul naya user hai -> create account with purchaser role
         user = await User.create({
           name,
           email,

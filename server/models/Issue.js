@@ -20,7 +20,8 @@ const issueSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Ek member ek time par ek hi book ki ek active copy le sakta hai
+// Indexes
+issueSchema.index({ book: 1, status: 1 });
 issueSchema.index(
   { book: 1, member: 1 },
   { unique: true, partialFilterExpression: { status: "issued" } }

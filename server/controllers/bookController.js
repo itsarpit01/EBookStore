@@ -5,6 +5,7 @@ import Issue from "../models/Issue.js";
 import User from "../models/User.js";
 import { bookQuerySchema } from "../validators/bookQueryValidator.js";
 import { sendNewBookAlertEmail, sendBookDiscontinuedEmail } from "../utils/mailer.js";
+import { sendNotification } from "./notificationController.js";
 
 const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -85,7 +86,7 @@ export const createBook = async (req, res) => {
 
   const book = await Book.create(bookData);
 
-  // ── NEW: Broadcast email to all registered & active members ──
+  // ── Broadcast email to all registered & active members ──
   (async () => {
     try {
       const activeMembers = await User.find({ role: "purchaser" }).select("name email");
@@ -159,7 +160,7 @@ export const deleteBook = async (req, res) => {
 };
 
 // PATCH /api/books/:id/discontinue (librarian)
-// ── NEW FEATURE: Discontinue book with mandatory date, optional reason & 7-day grace return window ──
+// ── Discontinue book with mandatory date, optional reason & 7-day grace return window ──
 export const discontinueBook = async (req, res) => {
   try {
     const { effectiveDate, reason } = req.body;
@@ -173,52 +174,75 @@ export const discontinueBook = async (req, res) => {
       return res.status(404).json({ message: "Book not found" });
     }
 
-    // Mark book as discontinued
+    // 1. Mark book as discontinued and zero available copies to stop new issues
     book.isDiscontinued = true;
     book.discontinueReason = reason ? reason.trim() : "Catalog retirement";
     book.discontinuedDate = new Date(effectiveDate);
-    // Discontinued books cannot accept new issues
     book.availableCopies = 0;
     await book.save();
 
-    // Find all actively issued copies
+    console.log(`\n[Discontinue] Book "${book.title}" (ID: ${book._id}) marked as discontinued.`);
+
+    // 2. Find all actively issued copies
     const activeIssues = await Issue.find({
       book: book._id,
       status: "issued",
     }).populate("member", "name email");
 
-    const now = new Date();
-    const oneWeekDeadline = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000); // exactly 7 days from today
+    console.log(`[Discontinue] Found ${activeIssues.length} active issue(s) for this book.`);
 
-    const notifiedMembers = [];
+    // 3. Strictly set 7 days (1 week) return window from today
+    const now = new Date();
+    const oneWeekDeadline = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    oneWeekDeadline.setHours(23, 59, 59, 999); // Till end of the 7th day
+
+    let emailSentCount = 0;
 
     for (const issue of activeIssues) {
-      // Set new due date to 1 week from today
+      // Har borrower ki due date update karke 7 din ka grace period dete hain
       issue.dueDate = oneWeekDeadline;
       await issue.save();
 
-      // Send discontinuation email strictly to this user
-      if (issue.member?.email) {
-        notifiedMembers.push(issue.member.email);
+      const member = issue.member;
+
+      if (member && member.email) {
+        emailSentCount++;
+        console.log(`[Discontinue] Sending notice email to: ${member.email} (${member.name})`);
+
+        // A. Send Targeted Discontinuation Notice Email
         sendBookDiscontinuedEmail({
-          to: issue.member.email,
-          name: issue.member.name,
+          to: member.email,
+          name: member.name || "Reader",
           bookTitle: book.title,
           reason: book.discontinueReason,
           effectiveDate: book.discontinuedDate,
           newDueDate: oneWeekDeadline,
         }).catch((err) =>
-          console.error(`[Book] Discontinue email failed for ${issue.member.email}:`, err.message)
+          console.error(`[Discontinue] Email error for ${member.email}:`, err.message)
         );
+
+        // B. Send In-App Bell Notification
+        sendNotification({
+          userId: member._id,
+          title: "Urgent: Issued Book Discontinued",
+          message: `"${book.title}" has been retired from the catalog. Please return your copy within 7 days by ${oneWeekDeadline.toLocaleDateString("en-IN")}.`,
+          type: "danger",
+          link: "/purchaser/my-issues",
+        }).catch(() => {});
+      } else {
+        console.warn(`[Discontinue] Could not find member email for issue: ${issue._id}`);
       }
     }
 
     res.json({
-      message: `Book marked as discontinued. ${activeIssues.length} active borrower(s) notified with a 7-day return deadline.`,
+      message: `Book discontinued successfully. ${activeIssues.length} active borrower(s) given a 7-day return grace period and notified via email.`,
       book,
       affectedBorrowersCount: activeIssues.length,
+      emailsDispatched: emailSentCount,
+      newReturnDeadline: oneWeekDeadline,
     });
   } catch (error) {
+    console.error("[Discontinue Error]:", error);
     res.status(500).json({ message: error.message });
   }
 };

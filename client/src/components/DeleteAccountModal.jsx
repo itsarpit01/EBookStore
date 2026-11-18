@@ -226,6 +226,7 @@ export default function DeleteAccountModal({ onClose }) {
               <strong>Notice:</strong> All profile records, membership benefits, borrowing history, and transaction logs will be permanently deleted.
             </div>
 
+            {/* Checkbox Row with CSS Isolation to prevent stretching */}
             <label
               style={{
                 display: "flex",
@@ -236,13 +237,26 @@ export default function DeleteAccountModal({ onClose }) {
                 cursor: "pointer",
                 marginBottom: 20,
                 lineHeight: 1.4,
+                userSelect: "none",
               }}
             >
               <input
                 type="checkbox"
                 checked={acknowledged}
                 onChange={(e) => setAcknowledged(e.target.checked)}
-                style={{ marginTop: 2, cursor: "pointer" }}
+                style={{
+                  width: "18px",
+                  height: "18px",
+                  minWidth: "18px",
+                  maxWidth: "18px",
+                  flexShrink: 0,
+                  marginTop: 2,
+                  cursor: "pointer",
+                  accentColor: "#dc2626",
+                  boxShadow: "none",
+                  appearance: "auto",
+                  border: "none",
+                }}
               />
               <span>
                 I understand that deleting my account is permanent and cannot be undone. Send a confirmation email to verify.
