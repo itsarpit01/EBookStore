@@ -27,6 +27,12 @@ export default function LibrarianBooks() {
   const [toDelete, setToDelete] = useState(null);
   const [deleting, setDeleting] = useState(false);
 
+  // ── Discontinue Book Modal State ──
+  const [toDiscontinue, setToDiscontinue] = useState(null);
+  const [discontinueDate, setDiscontinueDate] = useState(() => new Date().toISOString().split("T")[0]);
+  const [discontinueReason, setDiscontinueReason] = useState("");
+  const [discontinuing, setDiscontinuing] = useState(false);
+
   const debouncedSearch = useDebounce(search);
   const requestId = useRef(0);
 
@@ -75,6 +81,37 @@ export default function LibrarianBooks() {
       setToDelete(null);
     } finally {
       setDeleting(false);
+    }
+  };
+
+  // ── Handle Discontinue Confirmation ──
+  const handleOpenDiscontinueModal = (book) => {
+    setToDiscontinue(book);
+    setDiscontinueDate(new Date().toISOString().split("T")[0]);
+    setDiscontinueReason("");
+  };
+
+  const confirmDiscontinue = async (e) => {
+    e.preventDefault();
+    if (!discontinueDate) {
+      toast.error("Effective date is mandatory");
+      return;
+    }
+
+    setDiscontinuing(true);
+    try {
+      const res = await api.patch(`/books/${toDiscontinue._id}/discontinue`, {
+        effectiveDate: discontinueDate,
+        reason: discontinueReason,
+      });
+
+      toast.success(res.data.message || "Book discontinued successfully");
+      setToDiscontinue(null);
+      loadBooks();
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setDiscontinuing(false);
     }
   };
 
@@ -146,14 +183,52 @@ export default function LibrarianBooks() {
               key={b._id}
               book={b}
               actions={
-                <>
-                  <button className="btn btn-soft btn-sm" onClick={() => setFormBook(b)}>
-                    <EditIcon size={16} /> Edit
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", width: "100%" }}>
+                  <button
+                    className="btn btn-soft btn-sm"
+                    style={{ flex: 1 }}
+                    onClick={() => setFormBook(b)}
+                  >
+                    <EditIcon size={15} /> Edit
                   </button>
-                  <button className="btn btn-danger btn-sm" onClick={() => setToDelete(b)}>
-                    <TrashIcon size={16} /> Delete
+
+                  {!b.isDiscontinued ? (
+                    <button
+                      className="btn btn-sm"
+                      style={{
+                        background: "#fff7ed",
+                        color: "#c2410c",
+                        border: "1px solid #ffedd5",
+                        flex: 1,
+                        whiteSpace: "nowrap",
+                      }}
+                      onClick={() => handleOpenDiscontinueModal(b)}
+                      title="Discontinue this book and notify current borrowers"
+                    >
+                      Discontinue
+                    </button>
+                  ) : (
+                    <span
+                      style={{
+                        fontSize: "0.75rem",
+                        color: "#dc2626",
+                        fontWeight: 600,
+                        alignSelf: "center",
+                        padding: "0 4px",
+                      }}
+                    >
+                      Retired
+                    </span>
+                  )}
+
+                  <button
+                    className="btn btn-danger btn-sm"
+                    onClick={() => setToDelete(b)}
+                    title="Delete permanently"
+                  >
+                    <TrashIcon size={15} />
                   </button>
-                </>
+                </div>
               }
             />
           ))}
@@ -226,6 +301,77 @@ export default function LibrarianBooks() {
         />
       )}
 
+      {/* ── Discontinue Book Modal ── */}
+      {toDiscontinue && (
+        <Modal
+          title={`Discontinue "${toDiscontinue.title}"`}
+          onClose={() => setToDiscontinue(null)}
+        >
+          <form onSubmit={confirmDiscontinue} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div
+              style={{
+                background: "#fef2f2",
+                borderLeft: "4px solid #ef4444",
+                padding: "10px 14px",
+                borderRadius: "4px",
+                fontSize: "0.85rem",
+                color: "#991b1b",
+                lineHeight: 1.45,
+              }}
+            >
+              <strong>Notice:</strong> Marking this book as discontinued will prevent any new issues. Active borrowers will be given a <strong>7-day grace period</strong> from today to return their copy, and notification emails will be sent strictly to them.
+            </div>
+
+            <div className="field">
+              <label htmlFor="discontinueDate">
+                Effective Date <span style={{ color: "#dc2626" }}>*</span>
+              </label>
+              <input
+                id="discontinueDate"
+                type="date"
+                required
+                value={discontinueDate}
+                onChange={(e) => setDiscontinueDate(e.target.value)}
+              />
+            </div>
+
+            <div className="field">
+              <label htmlFor="discontinueReason">
+                Reason <span style={{ fontSize: "0.8rem", color: "var(--text-secondary, #666)" }}>(Optional)</span>
+              </label>
+              <textarea
+                id="discontinueReason"
+                placeholder="e.g. Outdated edition, inventory damaged, syllabus revised..."
+                rows={3}
+                value={discontinueReason}
+                onChange={(e) => setDiscontinueReason(e.target.value)}
+                style={{ resize: "vertical", fontFamily: "inherit" }}
+              />
+            </div>
+
+            <div className="modal-actions" style={{ marginTop: 10 }}>
+              <button
+                type="button"
+                className="btn btn-soft"
+                onClick={() => setToDiscontinue(null)}
+                disabled={discontinuing}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="btn"
+                style={{ background: "#dc2626", color: "#ffffff" }}
+                disabled={discontinuing || !discontinueDate}
+              >
+                {discontinuing ? "Discontinuing..." : "Confirm Discontinue"}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* Delete Confirmation Modal */}
       {toDelete && (
         <Modal title="Delete book" onClose={() => setToDelete(null)}>
           <p>
