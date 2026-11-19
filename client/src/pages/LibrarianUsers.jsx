@@ -12,6 +12,54 @@ const SERVER_URL =
     ? import.meta.env.VITE_API_URL.replace(/\/api\/?$/, "")
     : "http://localhost:5000");
 
+// ── Member Avatar Helper Component with Auto Fallback ────────────────────────
+const resolveAvatar = (src) => {
+  if (!src) return null;
+  if (src.startsWith("http") || src.startsWith("blob:") || src.startsWith("data:")) return src;
+  return `${SERVER_URL}${src.startsWith("/") ? "" : "/"}${src}`;
+};
+
+function MemberAvatar({ member, size = 34 }) {
+  const [broken, setBroken] = useState(false);
+  const avatarSrc = resolveAvatar(member?.avatar);
+
+  if (avatarSrc && !broken) {
+    return (
+      <img
+        src={avatarSrc}
+        alt=""
+        referrerPolicy="no-referrer"
+        onError={() => setBroken(true)}
+        style={{
+          width: size,
+          height: size,
+          borderRadius: "50%",
+          objectFit: "cover",
+          flexShrink: 0,
+        }}
+      />
+    );
+  }
+
+  return (
+    <span
+      className="avatar avatar-sm"
+      style={{
+        width: size,
+        height: size,
+        fontSize: size <= 34 ? "0.82rem" : "1rem",
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        flexShrink: 0,
+      }}
+    >
+      {member?.name?.[0]?.toUpperCase() || "M"}
+    </span>
+  );
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 const TIER_TABS = [
   { key: "", label: "All Plans" },
   { key: "free", label: "Free" },
@@ -53,7 +101,7 @@ export default function LibrarianUsers() {
     }
   }, [toast]);
 
-  // Real-time Auto-Sync every 8 seconds without hard refresh
+  // Real-time Auto-Sync every 60 seconds without hard refresh
   useEffect(() => {
     loadMembers();
     const interval = setInterval(loadMembers, 60000);
@@ -102,33 +150,36 @@ export default function LibrarianUsers() {
       return true;
     });
 
-    const sorted = [...filtered];
-    if (sortBy === "recent_activity") {
-      sorted.sort(
-        (a, b) =>
-          new Date(b.lastActivityAt || b.createdAt).getTime() -
-          new Date(a.lastActivityAt || a.createdAt).getTime()
-      );
-    } else if (sortBy === "joined") {
-      sorted.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-    } else if (sortBy === "books") {
-      sorted.sort((a, b) => (b.activeBooksCount || 0) - (a.activeBooksCount || 0));
-    } else if (sortBy === "fines") {
-      sorted.sort((a, b) => (b.totalFines || 0) - (a.totalFines || 0));
-    }
-
-    return sorted;
+    return [...filtered].sort((a, b) => {
+      if (sortBy === "recent_activity") {
+        const dateA = new Date(a.lastActivityAt || a.createdAt).getTime();
+        const dateB = new Date(b.lastActivityAt || b.createdAt).getTime();
+        return dateB - dateA;
+      }
+      if (sortBy === "joined") {
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      }
+      if (sortBy === "books") {
+        return (b.activeBooksCount || 0) - (a.activeBooksCount || 0);
+      }
+      if (sortBy === "fines") {
+        return (b.totalFines || 0) - (a.totalFines || 0);
+      }
+      return 0;
+    });
   }, [members, searchQuery, tierFilter, activityFilter, sortBy]);
 
-  const totalPages = Math.max(1, Math.ceil(filteredAndSortedMembers.length / PAGE_SIZE));
+  // Pagination calculation
+  const totalPages = Math.ceil(filteredAndSortedMembers.length / PAGE_SIZE) || 1;
   const paginatedMembers = useMemo(() => {
     const start = (page - 1) * PAGE_SIZE;
     return filteredAndSortedMembers.slice(start, start + PAGE_SIZE);
   }, [filteredAndSortedMembers, page]);
 
+  // Aggregate stats for Top Summary Cards
   const totalCount = members.length;
-  const paidCount = members.filter((m) => ["premium", "ultimate"].includes(m.membership?.tier)).length;
-  const borrowingCount = members.filter((m) => m.activeBooksCount > 0).length;
+  const paidCount = members.filter((m) => m.membership?.tier && m.membership.tier !== "free").length;
+  const borrowingCount = members.filter((m) => (m.activeBooksCount || 0) > 0).length;
   const finesTotal = members.reduce((sum, m) => sum + (m.totalFines || 0), 0);
 
   const renderTierBadge = (membership) => {
@@ -140,9 +191,9 @@ export default function LibrarianUsers() {
           style={{
             background: "linear-gradient(135deg, #f59e0b, #d97706)",
             color: "#fff",
-            fontWeight: 700,
             fontSize: "0.72rem",
-            padding: "3px 9px",
+            fontWeight: 700,
+            padding: "2px 8px",
           }}
         >
           Ultimate
@@ -156,9 +207,9 @@ export default function LibrarianUsers() {
           style={{
             background: "linear-gradient(135deg, #6366f1, #4338ca)",
             color: "#fff",
-            fontWeight: 700,
             fontSize: "0.72rem",
-            padding: "3px 9px",
+            fontWeight: 700,
+            padding: "2px 8px",
           }}
         >
           Premium
@@ -166,16 +217,7 @@ export default function LibrarianUsers() {
       );
     }
     return (
-      <span
-        className="badge"
-        style={{
-          background: "var(--card-bg, #f3f4f6)",
-          color: "#4b5563",
-          fontSize: "0.72rem",
-          padding: "3px 9px",
-          border: "1px solid var(--border, #d1d5db)",
-        }}
-      >
+      <span className="badge" style={{ fontSize: "0.72rem" }}>
         Free
       </span>
     );
@@ -195,7 +237,7 @@ export default function LibrarianUsers() {
         style={{
           display: "grid",
           gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-          gap: 14,
+          gap: 16,
           marginBottom: 20,
         }}
       >
@@ -329,88 +371,76 @@ export default function LibrarianUsers() {
               </tr>
             </thead>
             <tbody>
-              {paginatedMembers.map((m) => {
-                const avatarSrc = m.avatar ? `${SERVER_URL}${m.avatar}` : null;
-
-                return (
-                  <tr key={m._id}>
-                    <td>
-                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        {avatarSrc ? (
-                          <img
-                            src={avatarSrc}
-                            alt=""
-                            style={{ width: 34, height: 34, borderRadius: "50%", objectFit: "cover" }}
-                          />
-                        ) : (
-                          <span className="avatar avatar-sm">{m.name?.[0]?.toUpperCase()}</span>
-                        )}
-                        <div>
-                          <strong>{m.name}</strong>
-                          <span className="cell-sub">{m.email}</span>
-                        </div>
-                      </div>
-                    </td>
-
-                    <td>
-                      <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                        <div>{renderTierBadge(m.membership)}</div>
-                        {m.membership?.expiresAt && m.membership.tier !== "free" && (
-                          <span style={{ fontSize: "0.72rem", color: "var(--text-secondary, #666)" }}>
-                            Exp: {formatDate(m.membership.expiresAt)}
-                          </span>
-                        )}
-                      </div>
-                    </td>
-
-                    <td>
-                      <span
-                        className={`badge ${m.activeBooksCount > 0 ? "badge-primary" : "badge-secondary"}`}
-                        style={{ fontSize: "0.78rem" }}
-                      >
-                        {m.activeBooksCount} book(s)
-                      </span>
-                    </td>
-
-                    <td>
-                      <span
-                        className={`badge ${m.pendingRequestsCount > 0 ? "badge-warning" : "badge-secondary"}`}
-                        style={{ fontSize: "0.78rem" }}
-                      >
-                        {m.pendingRequestsCount} pending
-                      </span>
-                    </td>
-
-                    <td>
-                      <strong style={{ color: m.totalFines > 0 ? "#dc2626" : "#16a34a" }}>
-                        ₹{m.totalFines}
-                      </strong>
-                    </td>
-
-                    <td>
+              {paginatedMembers.map((m) => (
+                <tr key={m._id}>
+                  <td>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <MemberAvatar member={m} size={34} />
                       <div>
-                        <strong>{formatDate(m.lastActivityAt || m.createdAt)}</strong>
-                        <span
-                          className="cell-sub"
-                          style={{ fontSize: "0.72rem", color: "var(--text-secondary, #6b7280)", marginTop: 2 }}
-                        >
-                          Joined: {formatDate(m.createdAt)}
-                        </span>
+                        <strong>{m.name}</strong>
+                        <span className="cell-sub">{m.email}</span>
                       </div>
-                    </td>
+                    </div>
+                  </td>
 
-                    <td>
-                      <button
-                        className="btn btn-soft btn-sm"
-                        onClick={() => openActivity(m)}
-                        style={{ whiteSpace: "nowrap" }}
+                  <td>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                      <div>{renderTierBadge(m.membership)}</div>
+                      {m.membership?.expiresAt && m.membership.tier !== "free" && (
+                        <span style={{ fontSize: "0.72rem", color: "var(--text-secondary, #666)" }}>
+                          Exp: {formatDate(m.membership.expiresAt)}
+                        </span>
+                      )}
+                    </div>
+                  </td>
+
+                  <td>
+                    <span
+                      className={`badge ${m.activeBooksCount > 0 ? "badge-primary" : "badge-secondary"}`}
+                      style={{ fontSize: "0.78rem" }}
+                    >
+                      {m.activeBooksCount} book(s)
+                    </span>
+                  </td>
+
+                  <td>
+                    <span
+                      className={`badge ${m.pendingRequestsCount > 0 ? "badge-warning" : "badge-secondary"}`}
+                      style={{ fontSize: "0.78rem" }}
+                    >
+                      {m.pendingRequestsCount} pending
+                    </span>
+                  </td>
+
+                  <td>
+                    <strong style={{ color: m.totalFines > 0 ? "#dc2626" : "#16a34a" }}>
+                      ₹{m.totalFines}
+                    </strong>
+                  </td>
+
+                  <td>
+                    <div>
+                      <strong>{formatDate(m.lastActivityAt || m.createdAt)}</strong>
+                      <span
+                        className="cell-sub"
+                        style={{ fontSize: "0.72rem", color: "var(--text-secondary, #6b7280)", marginTop: 2 }}
                       >
-                        View Activity
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
+                        Joined: {formatDate(m.createdAt)}
+                      </span>
+                    </div>
+                  </td>
+
+                  <td>
+                    <button
+                      className="btn btn-soft btn-sm"
+                      onClick={() => openActivity(m)}
+                      style={{ whiteSpace: "nowrap" }}
+                    >
+                      View Activity
+                    </button>
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
@@ -483,10 +513,13 @@ export default function LibrarianUsers() {
                   marginBottom: 16,
                 }}
               >
-                <div>
-                  <div style={{ fontSize: "1rem", fontWeight: 700 }}>{activityData.member?.name}</div>
-                  <div style={{ fontSize: "0.8rem", color: "var(--text-secondary, #666)" }}>
-                    {activityData.member?.email}
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <MemberAvatar member={activityData.member} size={42} />
+                  <div>
+                    <div style={{ fontSize: "1rem", fontWeight: 700 }}>{activityData.member?.name}</div>
+                    <div style={{ fontSize: "0.8rem", color: "var(--text-secondary, #666)" }}>
+                      {activityData.member?.email}
+                    </div>
                   </div>
                 </div>
                 <div>{renderTierBadge(activityData.member?.membership)}</div>
