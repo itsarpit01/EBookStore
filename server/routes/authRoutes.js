@@ -23,6 +23,7 @@ import {
   resetLimiter,
 } from "../middleware/rateLimiter.js";
 import User from "../models/User.js";
+import { sendWelcomeEmail } from "../utils/mailer.js"; // <-- Welcome Email Import
 
 const router = express.Router();
 
@@ -56,7 +57,6 @@ router.get("/google", (req, res) => {
   authUrl.searchParams.set("response_type", "code");
   authUrl.searchParams.set("scope", "openid email profile");
   authUrl.searchParams.set("access_type", "offline");
-  // 🔥 HAR BAAR GOOGLE ACCOUNT SELECTOR DIKHAYEGA:
   authUrl.searchParams.set("prompt", "select_account");
 
   res.redirect(authUrl.toString());
@@ -150,6 +150,11 @@ router.get("/google/callback", async (req, res) => {
           avatar,
           role: "purchaser",
         });
+
+        // ── ✉️ SEND WELCOME EMAIL FOR NEW GOOGLE REGISTRATION ──
+        sendWelcomeEmail(user.email, user.name).catch((err) =>
+          console.error("[Google OAuth] Welcome email error:", err.message)
+        );
       }
     } else {
       // User pehle se Google ID se tha: agar avatar change hua ya purana broken tha to fresh avatar update karo

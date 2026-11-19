@@ -1,16 +1,60 @@
+import fs from "fs";
+import path from "path";
 import Issue from "../models/Issue.js";
 import User from "../models/User.js";
+import Book from "../models/Book.js";
 import { calcFine } from "../utils/fine.js";
 import { sendNotification } from "../controllers/notificationController.js";
-import { sendDueDateReminderEmail } from "../utils/mailer.js";
+import {
+  sendDueDateReminderEmail,
+  sendWeeklyNewArrivalsDigestEmail,
+} from "../utils/mailer.js";
 
-const formatDateStr = (date) => (date ? new Date(date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "");
+const formatDateStr = (date) =>
+  date
+    ? new Date(date).toLocaleDateString("en-IN", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+      })
+    : "";
+
+// ── State Persistence: Prevents duplicate weekly digest across server restarts ──
+const DIGEST_STATE_FILE = path.resolve(process.cwd(), ".digest_state.json");
+
+const getWeekId = (d = new Date()) => {
+  const year = d.getFullYear();
+  const oneJan = new Date(year, 0, 1);
+  const numberOfDays = Math.floor((d - oneJan) / (24 * 60 * 60 * 1000));
+  const week = Math.ceil((d.getDay() + 1 + numberOfDays) / 7);
+  return `${year}-W${week}`;
+};
+
+const getSavedDigestWeek = () => {
+  try {
+    if (fs.existsSync(DIGEST_STATE_FILE)) {
+      const data = JSON.parse(fs.readFileSync(DIGEST_STATE_FILE, "utf-8"));
+      return data.lastSentWeek;
+    }
+  } catch {}
+  return null;
+};
+
+const saveDigestWeek = (weekId) => {
+  try {
+    fs.writeFileSync(
+      DIGEST_STATE_FILE,
+      JSON.stringify({ lastSentWeek: weekId, sentAt: new Date() }),
+      "utf-8"
+    );
+  } catch {}
+};
+// ─────────────────────────────────────────────────────────────────────────────
 
 // 1. Check books due in 2 days (48h reminder) & send interactive reminder email
 const checkTwoDayDueReminders = async () => {
   try {
     const now = new Date();
-    // 48 hours window: between 24h from now and 48h from now
     const windowStart = new Date(now.getTime() + 24 * 60 * 60 * 1000);
     const windowEnd = new Date(now.getTime() + 48 * 60 * 60 * 1000);
 
@@ -21,7 +65,6 @@ const checkTwoDayDueReminders = async () => {
 
     for (const issue of upcomingIssues) {
       if (issue.member?.email && issue.book) {
-        // Send email with interactive Reissue & Return buttons
         await sendDueDateReminderEmail({
           to: issue.member.email,
           name: issue.member.name,
@@ -30,11 +73,12 @@ const checkTwoDayDueReminders = async () => {
           issueId: issue._id,
         });
 
-        // Also add in-app bell notification
         await sendNotification({
           userId: issue.member._id,
           title: "Book Due in 2 Days",
-          message: `Reminder: "${issue.book.title}" is due on ${formatDateStr(issue.dueDate)}. You can reissue or return it now.`,
+          message: `Reminder: "${issue.book.title}" is due on ${formatDateStr(
+            issue.dueDate
+          )}. You can reissue or return it now.`,
           type: "warning",
           link: `/purchaser/my-issues`,
         });
@@ -52,7 +96,6 @@ const checkUpcomingDueDates = async () => {
     const now = new Date();
     const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
 
-    // Books due between now and tomorrow (not yet overdue)
     const upcomingIssues = await Issue.find({
       status: "issued",
       dueDate: { $gte: now, $lte: tomorrow },
@@ -63,7 +106,9 @@ const checkUpcomingDueDates = async () => {
         await sendNotification({
           userId: issue.member._id,
           title: "Book Due Tomorrow",
-          message: `Reminder: "${issue.book.title}" is due tomorrow (${formatDateStr(issue.dueDate)}). Please return or request a reissue.`,
+          message: `Reminder: "${issue.book.title}" is due tomorrow (${formatDateStr(
+            issue.dueDate
+          )}). Please return or request a reissue.`,
           type: "warning",
           link: "/purchaser/my-issues",
         });
@@ -136,7 +181,57 @@ const checkMembershipExpiries = async () => {
   }
 };
 
-// Main Runner: Server start par ek baar, aur har 1 ghante me recurring
+// 5. ── WEEKLY NEW ARRIVALS DIGEST (Runs Once a Week on Friday) ──
+const checkWeeklyNewArrivalsDigest = async () => {
+  try {
+    const now = new Date();
+    const currentWeek = getWeekId(now);
+    const savedWeek = getSavedDigestWeek();
+
+    // Target day: 5 = Friday (0 = Sun, 1 = Mon, ..., 5 = Fri)
+    // Testing ke liye `.env` me WEEKLY_DIGEST_FORCE=true kar sakte hain
+    const targetDay = Number(process.env.WEEKLY_DIGEST_DAY ?? 5);
+    const isTargetDay = now.getDay() === targetDay;
+    const forceRun = process.env.WEEKLY_DIGEST_FORCE === "true";
+
+    if (!forceRun) {
+      // Sirf target day par chalega
+      if (!isTargetDay) return;
+
+      // Agar is hafte pehle hi ja chuki hai, toh dubara nahi bhejega
+      if (savedWeek === currentWeek) return;
+    }
+
+    // Pichle 7 dino me add hui kitabein fetch karo
+    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const newBooks = await Book.find({
+      createdAt: { $gte: sevenDaysAgo },
+      isDiscontinued: { $ne: true },
+    }).sort({ createdAt: -1 });
+
+    // ⭐ KEY RULE: Agar is hafte koi book add nahi hui, toh bilkul mail nahi jayegi!
+    if (!newBooks || newBooks.length === 0) {
+      console.log(`[Recurring] Weekly Digest: No new books added in the past 7 days. Skipping email.`);
+      saveDigestWeek(currentWeek);
+      return;
+    }
+
+    const members = await User.find({ role: "purchaser" }).select("name email");
+    if (!members || members.length === 0) return;
+
+    console.log(
+      `[Recurring] Weekly Digest: Found ${newBooks.length} new book(s). Sending digest to ${members.length} member(s)...`
+    );
+
+    await sendWeeklyNewArrivalsDigestEmail(members, newBooks);
+    saveDigestWeek(currentWeek);
+    console.log(`[Recurring] Weekly Digest dispatched successfully for ${currentWeek}!`);
+  } catch (err) {
+    console.error("[Recurring] checkWeeklyNewArrivalsDigest error:", err);
+  }
+};
+
+// Main Runner
 export const startRecurringJobs = () => {
   console.log("[Recurring] Background Automation Service Initialized");
 
@@ -146,13 +241,14 @@ export const startRecurringJobs = () => {
     await checkUpcomingDueDates();
     await checkOverdueBooksAndFines();
     await checkMembershipExpiries();
+    await checkWeeklyNewArrivalsDigest(); // <-- Weekly Digest Check Included
     console.log("[Recurring] Scheduled checks complete.");
   };
 
   // 1. Server start hone ke 5 sec baad run karega
   setTimeout(runAllJobs, 5000);
 
-  // 2. Har 1 ghante (3600000 ms) me background me automatically chalega
+  // 2. Har 1 ghante (3600000 ms) me background me automatically check karega
   const ONE_HOUR = 60 * 60 * 1000;
   setInterval(runAllJobs, ONE_HOUR);
 };

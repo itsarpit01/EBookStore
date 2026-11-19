@@ -72,6 +72,7 @@ export const getBookById = async (req, res) => {
 };
 
 // POST /api/books (librarian)
+// POST /api/books (librarian)
 export const createBook = async (req, res) => {
   const { isbn, totalCopies } = req.body;
 
@@ -86,21 +87,11 @@ export const createBook = async (req, res) => {
 
   const book = await Book.create(bookData);
 
-  // ── Broadcast email to all registered & active members ──
-  (async () => {
-    try {
-      const activeMembers = await User.find({ role: "purchaser" }).select("name email");
-      if (activeMembers && activeMembers.length > 0) {
-        await sendNewBookAlertEmail(activeMembers, book);
-      }
-    } catch (err) {
-      console.error("[Book] New book alert broadcast failed:", err.message);
-    }
-  })();
+  // ── Note: Instant broadcast email is disabled. ──
+  // Books are now automatically collected into the weekly Friday digest cron job.
 
   res.status(201).json(book);
 };
-
 // PUT /api/books/:id (librarian)
 export const updateBook = async (req, res) => {
   const book = await Book.findById(req.params.id);

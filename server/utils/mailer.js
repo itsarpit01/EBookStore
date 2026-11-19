@@ -175,7 +175,7 @@ export const sendOtpEmail = async (to, name, otp) => {
   await sendMailGeneric({ to, toName: name, subject, html, text });
 };
 
-/* ---------------- 2. ACCOUNT DELETION EMAIL ---------------- */
+/* ---------------- 2. ACCOUNT DELETION CONFIRMATION REQUEST EMAIL ---------------- */
 export const sendAccountDeletionEmail = async (to, name, userId, rawToken) => {
   const clientUrl = getCleanClientUrl();
   const confirmUrl = `${clientUrl}/delete-account-confirm?token=${rawToken}`;
@@ -234,6 +234,24 @@ This link expires in 15 minutes.`;
   await sendMailGeneric({ to, toName: name, subject, html: htmlContent, text: textContent });
 };
 
+/* ---------------- 2b. ACCOUNT DELETED SUCCESS EMAIL (SAFETY EXPORT) ---------------- */
+export const sendAccountDeletedSuccessEmail = async (to, name) => {
+  const subject = "Your LibraryHub Account Has Been Deleted";
+  const htmlContent = `
+    <div style="font-family:system-ui,sans-serif;max-width:480px;margin:auto;padding:22px;border:1px solid #e5e7eb;border-radius:10px;background:#ffffff">
+      <h3 style="color:#111827;margin-top:0">Account Successfully Deleted</h3>
+      <p>Hello <b>${escapeHtml(name)}</b>,</p>
+      <p>Your LibraryHub account and associated profile data have been permanently removed as requested.</p>
+      <p style="font-size:13px;color:#6b7280">If you ever wish to rejoin LibraryHub in the future, you are always welcome to sign up again.</p>
+    </div>
+  `;
+  try {
+    await sendMailGeneric({ to, toName: name, subject, html: htmlContent, text: `Hello ${name}, Your LibraryHub account has been deleted.` });
+  } catch (e) {
+    console.error("[Mailer] Account deletion success notice error:", e.message);
+  }
+};
+
 /* ---------------- 3. WELCOME EMAIL FOR NEW USER REGISTRATION ---------------- */
 export const sendWelcomeEmail = async (to, name) => {
   const clientUrl = getCleanClientUrl();
@@ -267,47 +285,11 @@ The LibraryHub Team`;
         We're thrilled to have you with us. Your account is fully active and ready to explore thousands of titles, manage loans, and track your reading journey.
       </p>
 
-      <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:18px;margin:20px 0">
-        <h3 style="margin:0 0 12px 0;font-size:15px;color:#334155;font-weight:700">Quick Guide: What You Can Do</h3>
-        
-        <div style="margin-bottom:12px;display:flex;align-items:flex-start">
-          <div style="background:#e0e7ff;color:#4f46e5;font-weight:700;width:24px;height:24px;border-radius:50%;text-align:center;line-height:24px;margin-right:12px;flex-shrink:0">1</div>
-          <div style="font-size:13px;line-height:1.5">
-            <strong>Browse Catalog:</strong> Search books by title, author, category, or ISBN with live availability filters.
-          </div>
-        </div>
-
-        <div style="margin-bottom:12px;display:flex;align-items:flex-start">
-          <div style="background:#e0e7ff;color:#4f46e5;font-weight:700;width:24px;height:24px;border-radius:50%;text-align:center;line-height:24px;margin-right:12px;flex-shrink:0">2</div>
-          <div style="font-size:13px;line-height:1.5">
-            <strong>Instant Issue & Request:</strong> Borrow available books or submit purchase requests for titles not yet in stock.
-          </div>
-        </div>
-
-        <div style="margin-bottom:12px;display:flex;align-items:flex-start">
-          <div style="background:#e0e7ff;color:#4f46e5;font-weight:700;width:24px;height:24px;border-radius:50%;text-align:center;line-height:24px;margin-right:12px;flex-shrink:0">3</div>
-          <div style="font-size:13px;line-height:1.5">
-            <strong>Renew & Reissue:</strong> Need extra days? Request a reissue directly from your dashboard before due date.
-          </div>
-        </div>
-
-        <div style="display:flex;align-items:flex-start">
-          <div style="background:#e0e7ff;color:#4f46e5;font-weight:700;width:24px;height:24px;border-radius:50%;text-align:center;line-height:24px;margin-right:12px;flex-shrink:0">4</div>
-          <div style="font-size:13px;line-height:1.5">
-            <strong>Help & Support:</strong> Connect with librarians through threaded support tickets right from the portal.
-          </div>
-        </div>
-      </div>
-
       <div style="text-align:center;margin:26px 0">
         <a href="${clientUrl}" style="background:#5c6bc0;color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;padding:12px 28px;border-radius:8px;display:inline-block">
           Explore LibraryHub Now &rarr;
         </a>
       </div>
-
-      <p style="font-size:12px;color:#9ca3af;text-align:center;margin:20px 0 0 0">
-        If you have any questions, simply reply to this email or open a support ticket in your account.
-      </p>
     </div>
   `;
 
@@ -318,68 +300,84 @@ The LibraryHub Team`;
   }
 };
 
-/* ---------------- 4. NEW BOOK ADDED ALERT EMAIL (BROADCAST) ---------------- */
-export const sendNewBookAlertEmail = async (recipients, book) => {
-  if (!recipients || recipients.length === 0) return;
+/* ---------------- 4. DEPRECATED INSTANT BOOK ALERT (Kept for safe backward-compat) ---------------- */
+export const sendNewBookAlertEmail = async () => {
+  // Discontinued in favor of Weekly Digest - no-op to prevent server crash
+  return true;
+};
+
+/* ---------------- 4b. WEEKLY NEW ARRIVALS DIGEST EMAIL (CRON) ---------------- */
+export const sendWeeklyNewArrivalsDigestEmail = async (recipients, books) => {
+  if (!recipients || recipients.length === 0 || !books || books.length === 0) return;
   const clientUrl = getCleanClientUrl();
-  const bookUrl = `${clientUrl}/books/${book._id}`;
-  const subject = `New Arrival at LibraryHub: "${book.title}" by ${book.author}`;
+  const catalogUrl = `${clientUrl}/purchaser/books`;
+  const count = books.length;
+  const subject = `📚 Weekly New Arrivals: ${count} fresh ${count === 1 ? "book" : "books"} added this week!`;
 
-  const textContent = `New Arrival Alert!
+  const booksTextList = books
+    .slice(0, 10)
+    .map(
+      (b, idx) =>
+        `${idx + 1}. "${b.title}" by ${b.author} (${b.category || "General"}) - ${
+          b.availableCopies ?? b.totalCopies
+        } copies available`
+    )
+    .join("\n");
 
-"${book.title}" by ${book.author} is now available in LibraryHub!
+  const textContent = `Hello Reader,
 
-Category: ${book.category || "General"}
-Copies Available: ${book.availableCopies || book.totalCopies}
-ISBN: ${book.isbn || "N/A"}
+Here is your Weekly New Arrivals Digest from LibraryHub!
 
-Description:
-${book.description ? book.description.substring(0, 200) + "..." : "No description provided."}
+This week, we added ${count} new title${count === 1 ? "" : "s"} to our collection:
 
-Check out this book: ${bookUrl}
+${booksTextList}
+
+Explore and borrow from the catalog:
+${catalogUrl}
 
 Happy reading,
-LibraryHub`;
+The LibraryHub Team`;
+
+  const booksHtmlList = books
+    .slice(0, 8)
+    .map(
+      (b) => `
+      <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:14px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;gap:12px">
+        <div style="flex:1">
+          <div style="font-size:15px;font-weight:700;color:#1e293b;margin-bottom:3px">${escapeHtml(b.title)}</div>
+          <div style="font-size:13px;color:#64748b;margin-bottom:6px">by <strong>${escapeHtml(b.author)}</strong></div>
+          <div style="display:flex;gap:10px;font-size:12px;color:#475569">
+            <span style="background:#e0e7ff;color:#4338ca;padding:2px 8px;border-radius:6px;font-weight:600">${escapeHtml(b.category || "General")}</span>
+            <span>Available: <strong>${b.availableCopies ?? b.totalCopies}</strong> copies</span>
+          </div>
+        </div>
+      </div>`
+    )
+    .join("");
 
   const htmlContent = `
-    <div style="font-family:system-ui,-apple-system,sans-serif;max-width:540px;margin:auto;padding:24px;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;color:#1f2937">
-      <div style="border-bottom:1px solid #f3f4f6;padding-bottom:14px;margin-bottom:18px">
-        <h2 style="margin:0;color:#5c6bc0;font-size:20px">LibraryHub • Fresh Arrival</h2>
-        <p style="margin:4px 0 0 0;font-size:12px;color:#6b7280">A new book has been added to our shelves</p>
+    <div style="font-family:system-ui,-apple-system,sans-serif;max-width:540px;margin:auto;padding:26px;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;color:#1f2937">
+      <div style="border-bottom:1px solid #f3f4f6;padding-bottom:16px;margin-bottom:20px;text-align:center">
+        <h2 style="margin:0;color:#5c6bc0;font-size:22px;font-weight:800">LibraryHub • Weekly Digest</h2>
+        <p style="margin:4px 0 0 0;font-size:13px;color:#6b7280">Fresh New Arrivals for Your Reading List</p>
       </div>
 
-      <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:18px;margin-bottom:18px">
-        <h3 style="margin:0 0 6px 0;font-size:18px;color:#1e293b">${escapeHtml(book.title)}</h3>
-        <p style="margin:0 0 12px 0;font-size:14px;color:#64748b">by <strong>${escapeHtml(book.author)}</strong></p>
+      <p style="font-size:14px;line-height:1.6;color:#334155;margin:0 0 16px 0">
+        Hello Book Lover! Here are the <strong>${count} new ${count === 1 ? "book" : "books"}</strong> added to LibraryHub this week. Be the first to grab a copy!
+      </p>
 
-        <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:#475569;margin-bottom:12px">
-          <span><strong>Category:</strong> ${escapeHtml(book.category || "General")}</span>
-          <span>•</span>
-          <span><strong>Available Copies:</strong> ${book.availableCopies || book.totalCopies}</span>
-        </div>
-
-        ${
-          book.description
-            ? `<p style="font-size:13px;line-height:1.5;color:#475569;margin:0;font-style:italic">
-                "${escapeHtml(book.description.substring(0, 240))}${book.description.length > 240 ? "..." : ""}"
-              </p>`
-            : ""
-        }
+      <div style="margin-bottom:20px">
+        ${booksHtmlList}
       </div>
 
-      <div style="text-align:center;margin:22px 0">
-        <a href="${bookUrl}" style="background:#5c6bc0;color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;padding:12px 24px;border-radius:8px;display:inline-block">
-          View & Issue This Book &rarr;
+      <div style="text-align:center;margin:24px 0">
+        <a href="${catalogUrl}" style="background:#5c6bc0;color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;padding:12px 28px;border-radius:8px;display:inline-block">
+          Explore All New Books &rarr;
         </a>
       </div>
-
-      <p style="font-size:11px;color:#94a3b8;text-align:center;margin:16px 0 0 0">
-        You are receiving this notification because you are a registered member of LibraryHub.
-      </p>
     </div>
   `;
 
-  // Send to all members (in small parallel batches to prevent rate limits)
   for (const member of recipients) {
     if (!member.email) continue;
     try {
@@ -391,7 +389,7 @@ LibraryHub`;
         text: textContent,
       });
     } catch (err) {
-      console.error(`[Mailer] New book alert failed for ${member.email}:`, err.message);
+      console.error(`[Weekly Digest] Failed sending to ${member.email}:`, err.message);
     }
   }
 };
@@ -406,66 +404,18 @@ export const sendBookDiscontinuedEmail = async ({ to, name, bookTitle, reason, e
   const dueStr = newDueDate ? new Date(newDueDate).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "Within 7 days";
 
   const textContent = `Hello ${name},
-
-Important Notice:
-The book "${bookTitle}" currently issued to you has been discontinued from the library catalog effective ${dateStr}.
-
-Reason: ${reason || "Catalog revision & archive"}
-
-Return Deadline (Grace Period):
-Because this title is being retired, your return deadline has been adjusted to: ${dueStr} (1 week from today).
-
-Please return the book to the library desk or submit a return request by this date to avoid overdue penalties.
-
-View your active issues: ${issuesUrl}
-
-LibraryHub Administration`;
+Important Notice: The book "${bookTitle}" has been discontinued. Please return before ${dueStr}.`;
 
   const htmlContent = `
-    <div style="font-family:system-ui,-apple-system,sans-serif;max-width:520px;margin:auto;padding:24px;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;color:#1f2937">
-      <div style="border-bottom:1px solid #f3f4f6;padding-bottom:14px;margin-bottom:18px">
-        <h2 style="margin:0;color:#dc2626;font-size:20px">LibraryHub • Discontinuation Notice</h2>
-        <p style="margin:4px 0 0 0;font-size:12px;color:#6b7280">Action required on active issued book</p>
+    <div style="font-family:system-ui,sans-serif;max-width:520px;margin:auto;padding:24px;border:1px solid #e5e7eb;border-radius:12px;">
+      <h3 style="color:#dc2626">Urgent Notice: Book Discontinued</h3>
+      <p>Hello <b>${escapeHtml(name)}</b>,</p>
+      <p>The book <strong>"${escapeHtml(bookTitle)}"</strong> currently issued to you has been discontinued from catalog.</p>
+      <p>Reason: ${escapeHtml(reason || "Catalog revision")}</p>
+      <p>Grace period return deadline: <b>${dueStr}</b></p>
+      <div style="text-align:center;margin:20px 0;">
+        <a href="${issuesUrl}" style="background:#dc2626;color:#ffffff;padding:10px 20px;border-radius:8px;text-decoration:none;">View My Issues</a>
       </div>
-
-      <p style="font-size:14px;line-height:1.5;margin:0 0 14px 0">
-        Hello <strong>${escapeHtml(name)}</strong>,
-      </p>
-
-      <p style="font-size:14px;line-height:1.5;margin:0 0 16px 0">
-        The following book currently issued to your account is being <strong>discontinued</strong> from the library catalog:
-      </p>
-
-      <div style="background:#fff7ed;border-left:4px solid #f97316;padding:14px;margin-bottom:18px;border-radius:6px">
-        <h4 style="margin:0 0 6px 0;font-size:16px;color:#9a3412">${escapeHtml(bookTitle)}</h4>
-        <div style="font-size:13px;color:#7c2d12;margin-bottom:4px">
-          <strong>Effective Date:</strong> ${dateStr}
-        </div>
-        ${
-          reason
-            ? `<div style="font-size:13px;color:#7c2d12">
-                <strong>Reason:</strong> ${escapeHtml(reason)}
-              </div>`
-            : ""
-        }
-      </div>
-
-      <div style="background:#fef2f2;border:1px solid #fecaca;padding:14px;border-radius:8px;margin-bottom:20px">
-        <strong style="color:#991b1b;display:block;margin-bottom:4px;font-size:14px">⏱️ 7-Day Return Window Assigned</strong>
-        <p style="margin:0;font-size:13px;color:#7f1d1d;line-height:1.5">
-          As per library policy, you have been granted a 1-week grace period. Please return this copy on or before <strong>${dueStr}</strong>.
-        </p>
-      </div>
-
-      <div style="text-align:center;margin:22px 0">
-        <a href="${issuesUrl}" style="background:#dc2626;color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;padding:12px 24px;border-radius:8px;display:inline-block">
-          View Active Issues / Return
-        </a>
-      </div>
-
-      <p style="font-size:12px;color:#6b7280;text-align:center;margin:16px 0 0 0">
-        Thank you for your cooperation in maintaining the library inventory.
-      </p>
     </div>
   `;
 
@@ -476,7 +426,7 @@ LibraryHub Administration`;
   }
 };
 
-/* ---------------- 6. DUE DATE 2-DAY REMINDER WITH REISSUE & RETURN BUTTONS ---------------- */
+/* ---------------- 6. DUE DATE 2-DAY REMINDER ---------------- */
 export const sendDueDateReminderEmail = async ({ to, name, bookTitle, dueDate, issueId }) => {
   const clientUrl = getCleanClientUrl();
   const dueStr = dueDate ? new Date(dueDate).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "in 2 days";
@@ -485,54 +435,17 @@ export const sendDueDateReminderEmail = async ({ to, name, bookTitle, dueDate, i
   const returnUrl = `${clientUrl}/purchaser/my-issues?action=return&issueId=${issueId}`;
   const reissueUrl = `${clientUrl}/purchaser/my-issues?action=reissue&issueId=${issueId}`;
 
-  const textContent = `Hello ${name},
-
-This is a friendly reminder that "${bookTitle}" is due in 2 days on ${dueStr}.
-
-To avoid late fee penalties, please choose an action:
-1. Reissue / Extend: ${reissueUrl}
-2. Return Book: ${returnUrl}
-
-Happy reading,
-LibraryHub`;
+  const textContent = `Hello ${name}, "${bookTitle}" is due on ${dueStr}. Reissue: ${reissueUrl} or Return: ${returnUrl}`;
 
   const htmlContent = `
-    <div style="font-family:system-ui,-apple-system,sans-serif;max-width:520px;margin:auto;padding:24px;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;color:#1f2937">
-      <div style="border-bottom:1px solid #f3f4f6;padding-bottom:14px;margin-bottom:18px">
-        <h2 style="margin:0;color:#5c6bc0;font-size:20px">LibraryHub • Due Date Reminder</h2>
-        <p style="margin:4px 0 0 0;font-size:12px;color:#6b7280">2 Days remaining before due date</p>
+    <div style="font-family:system-ui,sans-serif;max-width:520px;margin:auto;padding:24px;border:1px solid #e5e7eb;border-radius:12px;">
+      <h2 style="color:#5c6bc0;margin-top:0">Due Date Reminder</h2>
+      <p>Hello <strong>${escapeHtml(name)}</strong>,</p>
+      <p>Your issued book <strong>"${escapeHtml(bookTitle)}"</strong> is due on: <b>${dueStr}</b></p>
+      <div style="display:flex;gap:12px;margin:20px 0;">
+        <a href="${reissueUrl}" style="background:#5c6bc0;color:#ffffff;padding:10px 18px;border-radius:8px;text-decoration:none;">🔄 Reissue / Extend</a>
+        <a href="${returnUrl}" style="background:#10b981;color:#ffffff;padding:10px 18px;border-radius:8px;text-decoration:none;">📦 Return Book</a>
       </div>
-
-      <p style="font-size:14px;line-height:1.5;margin:0 0 14px 0">
-        Hello <strong>${escapeHtml(name)}</strong>,
-      </p>
-
-      <p style="font-size:14px;line-height:1.5;margin:0 0 16px 0">
-        Your issued book <strong>"${escapeHtml(bookTitle)}"</strong> is scheduled to be returned on:
-      </p>
-
-      <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:16px;text-align:center;margin-bottom:20px">
-        <div style="font-size:12px;color:#1e40af;font-weight:600;text-transform:uppercase;letter-spacing:0.5px">Due Date</div>
-        <div style="font-size:20px;color:#1e3a8a;font-weight:700;margin-top:4px">${dueStr}</div>
-      </div>
-
-      <p style="font-size:13px;line-height:1.5;color:#4b5563;margin-bottom:18px">
-        Still reading? You can easily extend your loan period by requesting a reissue. If you're finished, please return it on time to help other readers!
-      </p>
-
-      <!-- Action Buttons Side by Side -->
-      <div style="display:flex;gap:12px;justify-content:center;margin:24px 0;flex-wrap:wrap">
-        <a href="${reissueUrl}" style="background:#5c6bc0;color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;padding:11px 20px;border-radius:8px;display:inline-block">
-          🔄 Reissue / Extend
-        </a>
-        <a href="${returnUrl}" style="background:#10b981;color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;padding:11px 20px;border-radius:8px;display:inline-block">
-          📦 Return Book
-        </a>
-      </div>
-
-      <p style="font-size:12px;color:#9ca3af;text-align:center;margin:18px 0 0 0">
-        Late returns incur a daily fee after the due date passes.
-      </p>
     </div>
   `;
 
