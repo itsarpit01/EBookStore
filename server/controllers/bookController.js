@@ -35,21 +35,43 @@ export const getBooks = async (req, res) => {
   }
 
   const { search, category, author, available, sort, page, limit } = parsed.data;
-  const filter = {};
+  const andConditions = [];
 
+  // 1. Search Query (Title, Author, ISBN)
   if (search) {
     const regex = new RegExp(escapeRegex(search), "i");
-    filter.$or = [{ title: regex }, { author: regex }];
+    const searchOr = [{ title: regex }, { author: regex }];
 
     const isbnTerm = search.replace(/[-\s]/g, "");
     if (isbnTerm) {
-      filter.$or.push({ isbn: new RegExp(escapeRegex(isbnTerm), "i") });
+      searchOr.push({ isbn: new RegExp(escapeRegex(isbnTerm), "i") });
     }
+    andConditions.push({ $or: searchOr });
   }
-  if (category) filter.category = new RegExp(`^${escapeRegex(category)}$`, "i");
-  if (author) filter.author = new RegExp(escapeRegex(author), "i");
-  if (available === true) filter.availableCopies = { $gt: 0 };
-  if (available === false) filter.availableCopies = 0;
+
+  // 2. Category & Author Filters
+  if (category) andConditions.push({ category: new RegExp(`^${escapeRegex(category)}$`, "i") });
+  if (author) andConditions.push({ author: new RegExp(escapeRegex(author), "i") });
+
+  // 3. ── AVAILABLE / NOT AVAILABLE / ALL FILTER ──
+  if (available === true) {
+    // ✅ Available: Available copies > 0 honi chahiye AND Discontinued NAHI honi chahiye
+    andConditions.push({
+      availableCopies: { $gt: 0 },
+      isDiscontinued: { $ne: true },
+    });
+  } else if (available === false) {
+    // ✅ Not Available: 0 copies ho chuki hon YA fir Discontinue ho chuki ho
+    andConditions.push({
+      $or: [
+        { availableCopies: { $lte: 0 } },
+        { isDiscontinued: true },
+      ],
+    });
+  }
+  // Agar available query nahi hai (All books), toh koi condition add nahi hogi -> Saari books aayengi!
+
+  const filter = andConditions.length > 0 ? { $and: andConditions } : {};
 
   const sortBy = sort.startsWith("-") ? { [sort.slice(1)]: -1 } : { [sort]: 1 };
 
@@ -72,7 +94,6 @@ export const getBookById = async (req, res) => {
 };
 
 // POST /api/books (librarian)
-// POST /api/books (librarian)
 export const createBook = async (req, res) => {
   const { isbn, totalCopies } = req.body;
 
@@ -92,6 +113,7 @@ export const createBook = async (req, res) => {
 
   res.status(201).json(book);
 };
+
 // PUT /api/books/:id (librarian)
 export const updateBook = async (req, res) => {
   const book = await Book.findById(req.params.id);

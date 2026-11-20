@@ -35,6 +35,36 @@ const userSchema = new mongoose.Schema(
     },
     accountDeleteToken: { type: String, default: null },
     accountDeleteExpires: { type: Date, default: null },
+
+    // ── Online Credits & Digital Shelf Fields ──
+    credits: {
+      type: Number,
+      default: 100, // Naye users ko 100 free credits milenge
+      min: 0,
+    },
+    // User ki rented / lifetime digital books list
+    digitalShelf: [
+      {
+        book: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "Book",
+          required: true,
+        },
+        plan: {
+          type: String,
+          enum: ["day", "week", "year", "lifetime"],
+          required: true,
+        },
+        paymentMode: {
+          type: String,
+          enum: ["credits", "cash"],
+          default: "credits",
+        },
+        amountPaid: { type: Number, default: 0 },
+        acquiredAt: { type: Date, default: Date.now },
+        expiresAt: { type: Date, default: null }, // null means Lifetime Ownership!
+      },
+    ],
   },
   { timestamps: true }
 );

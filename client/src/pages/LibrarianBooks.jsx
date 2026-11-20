@@ -115,6 +115,20 @@ export default function LibrarianBooks() {
     }
   };
 
+  // ── Smart Filter Layer ──
+  // 1. All: Saari books dikhegi
+  // 2. Available: Discontinue wali NAHI dikhegi (sirf active copies > 0)
+  // 3. Not available: 0 copies wali AUR Discontinued wali books dikhegi
+  const displayedBooks = books.filter((b) => {
+    if (available === "true") {
+      return !b.isDiscontinued && b.availableCopies > 0;
+    }
+    if (available === "false") {
+      return b.isDiscontinued || b.availableCopies <= 0;
+    }
+    return true;
+  });
+
   return (
     <>
       <div className="page-head">
@@ -171,14 +185,14 @@ export default function LibrarianBooks() {
 
       {firstLoad && loading ? (
         <p className="empty">Loading books...</p>
-      ) : books.length === 0 ? (
+      ) : displayedBooks.length === 0 ? (
         <p className="empty">No books found.</p>
       ) : (
         <div
           className="book-grid"
           style={{ opacity: loading ? 0.6 : 1, transition: "opacity 0.15s" }}
         >
-          {books.map((b) => (
+          {displayedBooks.map((b) => (
             <BookCard
               key={b._id}
               book={b}
