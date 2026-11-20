@@ -6,17 +6,21 @@ const isbnSchema = z
   .transform((v) => v.replace(/-/g, ""))
   .refine((v) => /^(\d{10}|\d{13})$/.test(v), "ISBN must be 10 or 13 digits");
 
-// multipart mein sab string aata hai, khaali string ko missing maano
 const emptyToUndefined = (v) => (v === "" || v === null ? undefined : v);
 
 const bookFields = {
   title: z.string({ error: "Title is required" }).trim().min(1, "Title is required").max(150),
   author: z.string({ error: "Author is required" }).trim().min(1, "Author is required").max(100),
   isbn: isbnSchema,
-  category: z.string().trim().max(50), // "" allowed, edit mein category clear karne ke liye
+  category: z.string().trim().max(50),
   price: z.preprocess(
     emptyToUndefined,
     z.coerce.number({ error: "Price is required" }).nonnegative("Price cannot be negative")
+  ),
+  // ── Optional Credit Price Field (Backend Validation) ──
+  creditPrice: z.preprocess(
+    emptyToUndefined,
+    z.coerce.number().nonnegative("Credit price cannot be negative").optional()
   ),
   totalCopies: z.preprocess(
     emptyToUndefined,

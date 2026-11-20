@@ -54,6 +54,9 @@ export default function AppLayout() {
   const [avatarBroken, setAvatarBroken] = useState(false);
   const [showMembershipModal, setShowMembershipModal] = useState(false);
 
+  // Live Credits State for Purchaser
+  const [userCredits, setUserCredits] = useState(user?.credits ?? 100);
+
   // Profile Dropdown state & ref
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const menuRef = useRef(null);
@@ -63,13 +66,12 @@ export default function AppLayout() {
 
   const links = NAV[user?.role] || [];
 
-  // ── FIX: Google External Avatar vs Local Uploaded Avatar ──────────────────
+  // Google External Avatar vs Local Uploaded Avatar
   const avatarSrc = user?.avatar
     ? user.avatar.startsWith("http")
       ? user.avatar
       : `${SERVER_URL}${user.avatar.startsWith("/") ? "" : "/"}${user.avatar}`
     : null;
-  // ──────────────────────────────────────────────────────────────────────────
 
   const tier = getEffectiveTier(user);
 
@@ -88,19 +90,24 @@ export default function AppLayout() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // Load quota for purchaser sidebar widget
+  // Load quota & live credits for purchaser
   const loadSidebarQuota = useCallback(async () => {
     if (user?.role !== "purchaser") return;
     try {
-      const [reqRes, issueRes] = await Promise.all([
+      const [reqRes, issueRes, shelfRes] = await Promise.all([
         api.get("/purchase-requests/my").catch(() => ({ data: [] })),
         api.get("/issues/my").catch(() => ({ data: [] })),
+        api.get("/books/my-digital-shelf").catch(() => ({ data: { credits: 100 } })),
       ]);
       const reqs = Array.isArray(reqRes.data) ? reqRes.data : [];
       const pending = reqs.filter((r) => ["pending", "counter_offered"].includes(r.status)).length;
       const issues = Array.isArray(issueRes.data) ? issueRes.data : [];
       const active = issues.filter((i) => i.status === "issued").length;
       setSidebarCapacity({ active, pending });
+
+      if (shelfRes.data?.credits !== undefined) {
+        setUserCredits(shelfRes.data.credits);
+      }
     } catch {
       // background silent
     }
@@ -109,12 +116,14 @@ export default function AppLayout() {
   // Real-time auto sync
   useEffect(() => {
     loadSidebarQuota();
-    const interval = setInterval(loadSidebarQuota, 60000);
+    const interval = setInterval(loadSidebarQuota, 30000); // sync every 30s
     const onQuotaUpdated = () => loadSidebarQuota();
     window.addEventListener("quotaUpdated", onQuotaUpdated);
+    window.addEventListener("quota-updated", onQuotaUpdated);
     return () => {
       clearInterval(interval);
       window.removeEventListener("quotaUpdated", onQuotaUpdated);
+      window.removeEventListener("quota-updated", onQuotaUpdated);
     };
   }, [loadSidebarQuota]);
 
@@ -269,6 +278,34 @@ export default function AppLayout() {
           </div>
 
           <div className="topbar-right">
+            {/* ── LIVE PURCHASER CREDITS BADGE (Pure Inline SVG) ── */}
+            {user?.role === "purchaser" && (
+              <div
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                  background: "#fef3c7",
+                  border: "1px solid #fde68a",
+                  color: "#b45309",
+                  padding: "5px 12px",
+                  borderRadius: 20,
+                  fontWeight: 800,
+                  fontSize: "0.82rem",
+                  cursor: "default",
+                  boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
+                }}
+                title="Your credits balance (Earn +10 credits on every on-time book return!)"
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
+                  <circle cx="12" cy="12" r="10" fill="#f59e0b" />
+                  <circle cx="12" cy="12" r="7.5" stroke="#ffffff" strokeWidth="1.5" fill="none" />
+                  <text x="12" y="16" textAnchor="middle" fill="#ffffff" fontSize="11" fontWeight="900">C</text>
+                </svg>
+                <span>{userCredits} Credits</span>
+              </div>
+            )}
+
             <ThemeToggle />
             <NotificationBell />
 
@@ -334,7 +371,7 @@ export default function AppLayout() {
                     <div style={{ fontSize: "0.78rem", color: "var(--muted, #666)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {user?.email}
                     </div>
-                    <div style={{ marginTop: 8 }}>
+                    <div style={{ marginTop: 8, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                       <span
                         style={{
                           fontSize: "0.72rem",
@@ -359,6 +396,21 @@ export default function AppLayout() {
                       >
                         {user?.role === "purchaser" ? `${tier.name} Plan` : `${user?.role} Staff`}
                       </span>
+
+                      {user?.role === "purchaser" && (
+                        <span
+                          style={{
+                            fontSize: "0.72rem",
+                            fontWeight: 700,
+                            padding: "3px 8px",
+                            borderRadius: 12,
+                            background: "#fef3c7",
+                            color: "#b45309",
+                          }}
+                        >
+                          🪙 {userCredits} Credits
+                        </span>
+                      )}
                     </div>
                   </div>
 

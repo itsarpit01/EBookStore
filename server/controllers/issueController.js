@@ -1,5 +1,6 @@
 import Issue from "../models/Issue.js";
 import Book from "../models/Book.js";
+import User from "../models/User.js";
 import PurchaseRequest from "../models/PurchaseRequest.js";
 import Notification from "../models/Notification.js";
 import { calcFine, withOverdueInfo } from "../utils/fine.js";
@@ -79,7 +80,6 @@ export const cancelReissue = async (req, res) => {
   issue.reissueRequestedDate = null;
   await issue.save();
 
-  // Cancel hote hi librarian ke notification card se hatt jayegi!
   await Notification.deleteMany({
     title: "New Reissue Request",
     link: "/librarian/requests",
@@ -100,7 +100,6 @@ export const reissue = async (req, res) => {
 
   const populated = await populateIssue(Issue.findById(issue._id));
 
-  // 1. Purchaser ko notification
   sendNotification({
     userId: populated.member?._id || populated.member,
     title: "Reissue Approved",
@@ -109,7 +108,6 @@ export const reissue = async (req, res) => {
     link: "/purchaser/my-issues",
   });
 
-  // 2. Resolve hote hi Librarian ke notification card se DELETE ho jayegi!
   await Notification.deleteMany({
     title: "New Reissue Request",
     link: "/librarian/requests",
@@ -132,7 +130,6 @@ export const rejectReissue = async (req, res) => {
 
   const populated = await populateIssue(Issue.findById(issue._id));
 
-  // 1. Purchaser ko notification
   sendNotification({
     userId: populated.member?._id || populated.member,
     title: "Reissue Rejected",
@@ -141,7 +138,6 @@ export const rejectReissue = async (req, res) => {
     link: "/purchaser/my-issues",
   });
 
-  // 2. Reject hote hi Librarian ke notification card se DELETE ho jayegi!
   await Notification.deleteMany({
     title: "New Reissue Request",
     link: "/librarian/requests",
@@ -150,7 +146,6 @@ export const rejectReissue = async (req, res) => {
   res.json(withOverdueInfo(populated));
 };
 
-// PATCH /api/issues/:id/return (librarian ya purchaser apna)
 // PATCH /api/issues/:id/return (librarian or purchaser returning own book)
 export const returnBook = async (req, res) => {
   const query = { _id: req.params.id };
@@ -164,13 +159,14 @@ export const returnBook = async (req, res) => {
   }
 
   const now = new Date();
+  const fineAmount = calcFine(issue.dueDate, now);
 
   const updated = await Issue.findOneAndUpdate(
     { _id: issue._id, status: "issued" },
     {
       status: "returned",
       returnDate: now,
-      fine: calcFine(issue.dueDate, now),
+      fine: fineAmount,
       reissueRequested: false,
       reissueRequestedDate: null,
     },
@@ -192,8 +188,44 @@ export const returnBook = async (req, res) => {
     // Ignore notification deletion errors
   }
 
+  // ── ⭐ ON-TIME BOOK RETURN REWARD (+10 BONUS CREDITS) ⭐ ──
+  let rewardGranted = false;
+  const isOnTime = fineAmount === 0 && now.getTime() <= new Date(issue.dueDate).getTime();
+
+  if (isOnTime) {
+    try {
+      const userDoc = await User.findById(issue.member);
+      if (userDoc) {
+        if (userDoc.credits === undefined || userDoc.credits === null) {
+          userDoc.credits = 100;
+        }
+        userDoc.credits += 10; // +10 Bonus Credits
+        await userDoc.save();
+        rewardGranted = true;
+
+        const bookDoc = await Book.findById(issue.book);
+        const bookTitle = bookDoc?.title || "your book";
+
+        // In-app Bell Notification to user
+        sendNotification({
+          userId: issue.member,
+          title: "🎉 +10 Credits Rewarded!",
+          message: `Great job returning "${bookTitle}" on time! +10 Bonus Credits added to your balance.`,
+          type: "success",
+          link: "/purchaser/books",
+        });
+      }
+    } catch (rewardErr) {
+      console.error("[Reward Error]:", rewardErr.message);
+    }
+  }
+
   const populated = await populateIssue(Issue.findById(updated._id));
-  res.json(withOverdueInfo(populated));
+  res.json({
+    ...withOverdueInfo(populated),
+    rewardGranted,
+    creditsEarned: rewardGranted ? 10 : 0,
+  });
 };
 
 // GET /api/issues?status=issued|returned|overdue|reissue_requested&reissueRequested=true (librarian)

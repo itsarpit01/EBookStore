@@ -13,11 +13,43 @@ const SERVER_URL =
     ? import.meta.env.VITE_API_URL.replace(/\/api\/?$/, "")
     : "http://localhost:5000");
 
-const empty = { title: "", author: "", isbn: "", category: "", price: "", totalCopies: 1 };
+const PRESET_CATEGORIES = [
+  "Programming & Tech",
+  "Computer Science",
+  "Self-Help & Productivity",
+  "Fiction & Literature",
+  "Business & Economics",
+  "Science & Nature",
+  "History & Biography",
+  "Mathematics & Logic",
+  "Philosophy & Psychology",
+];
+
+const empty = {
+  title: "",
+  author: "",
+  isbn: "",
+  category: "",
+  price: "",
+  creditPrice: "",
+  totalCopies: 1,
+};
 
 export default function BookFormModal({ book, onClose, onSaved }) {
   const toast = useToast();
   const isEdit = Boolean(book);
+
+  // Category choice initial calculation
+  const initialCategory = book?.category || "";
+  const isPreset = PRESET_CATEGORIES.includes(initialCategory);
+
+  const [categoryChoice, setCategoryChoice] = useState(() => {
+    if (!initialCategory) return "";
+    return isPreset ? initialCategory : "Other";
+  });
+  const [customCategory, setCustomCategory] = useState(() => {
+    return isPreset ? "" : initialCategory;
+  });
 
   const [form, setForm] = useState(
     isEdit
@@ -27,6 +59,7 @@ export default function BookFormModal({ book, onClose, onSaved }) {
           isbn: book.isbn,
           category: book.category || "",
           price: book.price,
+          creditPrice: book.creditPrice || Math.max(1, Math.round((book.price || 100) / 10)),
           totalCopies: book.totalCopies,
         }
       : empty
@@ -44,6 +77,39 @@ export default function BookFormModal({ book, onClose, onSaved }) {
     setErrors((er) => ({ ...er, [e.target.name]: undefined }));
   };
 
+  // Price change hone par Credit Price automatically suggest karein (price / 10)
+  const handlePriceChange = (e) => {
+    const val = e.target.value;
+    const numPrice = Number(val);
+    const suggestedCredits = numPrice > 0 ? Math.max(1, Math.round(numPrice / 10)) : "";
+
+    setForm((f) => ({
+      ...f,
+      price: val,
+      creditPrice: suggestedCredits,
+    }));
+    setErrors((er) => ({ ...er, price: undefined }));
+  };
+
+  // Category Dropdown Change
+  const handleCategoryChoiceChange = (e) => {
+    const val = e.target.value;
+    setCategoryChoice(val);
+    if (val === "Other") {
+      setForm((f) => ({ ...f, category: customCategory }));
+    } else {
+      setForm((f) => ({ ...f, category: val }));
+    }
+    setErrors((er) => ({ ...er, category: undefined }));
+  };
+
+  // Custom Category Text Input Change
+  const handleCustomCategoryInput = (e) => {
+    const val = e.target.value;
+    setCustomCategory(val);
+    setForm((f) => ({ ...f, category: val }));
+  };
+
   const handleFilePicked = (file) => {
     if (!file) return;
     setRawImageSrc(URL.createObjectURL(file));
@@ -59,6 +125,7 @@ export default function BookFormModal({ book, onClose, onSaved }) {
     e.preventDefault();
     setFormError("");
 
+    // Schema validation
     const parsed = bookFormSchema.safeParse(form);
     if (!parsed.success) {
       const fe = {};
@@ -75,6 +142,14 @@ export default function BookFormModal({ book, onClose, onSaved }) {
 
     const fd = new FormData();
     Object.entries(payload).forEach(([key, val]) => fd.append(key, val));
+    
+    // Explicitly append creditPrice if set
+    if (form.creditPrice) {
+      fd.append("creditPrice", form.creditPrice);
+    } else if (form.price) {
+      fd.append("creditPrice", Math.max(1, Math.round(Number(form.price) / 10)));
+    }
+
     if (coverFile) fd.append("coverImage", coverFile);
 
     setSaving(true);
@@ -117,11 +192,106 @@ export default function BookFormModal({ book, onClose, onSaved }) {
           {Field({ name: "title", label: "Title", required: true })}
           {Field({ name: "author", label: "Author", required: true })}
           {Field({ name: "isbn", label: "ISBN", hint: "10 or 13 digits, hyphens allowed", required: true })}
-          {Field({ name: "category", label: "Category" })}
 
-          <div className="form-row">
-            {Field({ name: "price", label: "Price (₹)", type: "number", min: 0, required: true })}
-            {Field({ name: "totalCopies", label: "Total copies", type: "number", min: 1, required: true })}
+          {/* ── CATEGORY DROPDOWN WITH "OTHER" OPTION ── */}
+          <div className="field">
+            <label htmlFor="categorySelect">Category</label>
+            <select
+              id="categorySelect"
+              value={categoryChoice}
+              onChange={handleCategoryChoiceChange}
+              style={{
+                width: "100%",
+                padding: "8px 12px",
+                borderRadius: 8,
+                border: "1px solid var(--border, #cbd5e1)",
+                background: "var(--surface, #ffffff)",
+                fontFamily: "inherit",
+                fontSize: "0.9rem",
+              }}
+            >
+              <option value="">Select a category</option>
+              {PRESET_CATEGORIES.map((cat) => (
+                <option key={cat} value={cat}>
+                  {cat}
+                </option>
+              ))}
+              <option value="Other">Other (Type custom category...)</option>
+            </select>
+          </div>
+
+          {categoryChoice === "Other" && (
+            <div className="field" style={{ marginTop: -4 }}>
+              <label htmlFor="customCategory">Custom Category Name</label>
+              <input
+                id="customCategory"
+                type="text"
+                placeholder="e.g. Manga, Anthologies, Research..."
+                value={customCategory}
+                onChange={handleCustomCategoryInput}
+                autoFocus
+              />
+            </div>
+          )}
+
+          {/* ── PRICE, CREDITS, & TOTAL COPIES ROW ── */}
+          <div
+            className="form-row"
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr 1fr",
+              gap: 10,
+              alignItems: "start",
+            }}
+          >
+            <div className="field">
+              <label htmlFor="price">
+                Price (₹) <span style={{ color: "var(--danger, #e53935)" }}>*</span>
+              </label>
+              <input
+                id="price"
+                name="price"
+                type="number"
+                min="0"
+                value={form.price}
+                onChange={handlePriceChange}
+                placeholder="499"
+                required
+              />
+              {errors.price && <span className="error-text">{errors.price}</span>}
+            </div>
+
+            <div className="field">
+              <label htmlFor="creditPrice" style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                Credits (🪙)
+              </label>
+              <input
+                id="creditPrice"
+                name="creditPrice"
+                type="number"
+                min="1"
+                value={form.creditPrice}
+                onChange={change}
+                placeholder="50"
+              />
+              <span className="hint" style={{ fontSize: "0.68rem" }}>₹10 = 1C (editable)</span>
+            </div>
+
+            <div className="field">
+              <label htmlFor="totalCopies">
+                Total copies <span style={{ color: "var(--danger, #e53935)" }}>*</span>
+              </label>
+              <input
+                id="totalCopies"
+                name="totalCopies"
+                type="number"
+                min="1"
+                value={form.totalCopies}
+                onChange={change}
+                required
+              />
+              {errors.totalCopies && <span className="error-text">{errors.totalCopies}</span>}
+            </div>
           </div>
 
           <div className="field">
