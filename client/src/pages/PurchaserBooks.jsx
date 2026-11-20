@@ -9,7 +9,6 @@ import useDebounce from "../hooks/useDebounce";
 import BookCard from "../components/BookCard";
 import RequestFormModal from "../components/RequestFormModal";
 import MembershipModal from "../components/MembershipModal";
-import DigitalAccessModal from "../components/DigitalAccessModal";
 import Modal from "../components/Modal";
 import { SearchIcon, RequestIcon } from "../components/Icons";
 
@@ -31,31 +30,24 @@ export default function PurchaserBooks() {
   const [sort, setSort] = useState("title");
   const [page, setPage] = useState(1);
 
-  // Active slots tracking (Pending/Counter requests + Issued books)
+  // Active slots tracking
   const [activeSlotsCount, setActiveSlotsCount] = useState(0);
   const [totalUnpaidFines, setTotalUnpaidFines] = useState(0);
 
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [showFineBlockedModal, setShowFineBlockedModal] = useState(false);
 
-  // Physical Request state
+  // Single Modal State: null = closed, {} = dropdown, { bookId } = specific book
   const [requestFor, setRequestFor] = useState(null);
-
-  // ── Online Digital Rent / Purchase Modal State ──
-  const [digitalBookTarget, setDigitalBookTarget] = useState(null);
-  const [userCredits, setUserCredits] = useState(100);
-  const [myDigitalShelf, setMyDigitalShelf] = useState([]);
 
   const debouncedSearch = useDebounce(search);
   const requestId = useRef(0);
 
-  // User ka current active quota, unpaid fines aur credits load karna
   const loadUserQuota = useCallback(async () => {
     try {
-      const [reqRes, issueRes, shelfRes] = await Promise.all([
+      const [reqRes, issueRes] = await Promise.all([
         api.get("/purchase-requests/my").catch(() => ({ data: [] })),
         api.get("/issues/my").catch(() => ({ data: [] })),
-        api.get("/books/my-digital-shelf").catch(() => ({ data: { credits: 100, digitalShelf: [] } })),
       ]);
 
       const reqs = Array.isArray(reqRes.data) ? reqRes.data : [];
@@ -72,15 +64,8 @@ export default function PurchaserBooks() {
 
       setActiveSlotsCount(pendingReqs + activeIssues);
       setTotalUnpaidFines(fines);
-
-      if (shelfRes.data?.credits !== undefined) {
-        setUserCredits(shelfRes.data.credits);
-      }
-      if (Array.isArray(shelfRes.data?.digitalShelf)) {
-        setMyDigitalShelf(shelfRes.data.digitalShelf);
-      }
     } catch {
-      // Silent fail fallback
+      // Silent
     }
   }, []);
 
@@ -137,23 +122,7 @@ export default function PurchaserBooks() {
       setShowFineBlockedModal(true);
       return;
     }
-    if (isQuotaFull) {
-      setShowUpgradeModal(true);
-      return;
-    }
     setRequestFor(bookId ? { bookId } : {});
-  };
-
-  // Check if user already owns or rented this book online
-  const getActiveDigitalAccess = (bookId) => {
-    const item = myDigitalShelf.find(
-      (s) => s.book?._id === bookId || s.book === bookId
-    );
-    if (!item) return null;
-    if (!item.expiresAt) return { plan: "lifetime", text: "Owned (Lifetime)" };
-    const isExpired = new Date(item.expiresAt) <= new Date();
-    if (isExpired) return null;
-    return { plan: item.plan, text: `Active (${item.plan.toUpperCase()})` };
   };
 
   return (
@@ -164,55 +133,29 @@ export default function PurchaserBooks() {
           <p>{pagination.total} book(s) in the library.</p>
         </div>
 
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          {/* User Credits Pill Badge */}
-          <div
+        {isQuotaFull && !hasFineDue ? (
+          <button
+            className="btn"
             style={{
+              background: "linear-gradient(135deg, #6366f1, #4f46e5)",
+              color: "#fff",
               display: "inline-flex",
               alignItems: "center",
-              gap: 6,
-              background: "#fef3c7",
-              border: "1px solid #fde68a",
-              color: "#b45309",
-              padding: "6px 12px",
-              borderRadius: 20,
-              fontWeight: 700,
-              fontSize: "0.85rem",
+              gap: 8,
             }}
-            title="Your credits balance for online rent & purchase"
+            onClick={() => setShowUpgradeModal(true)}
+            title="Quota reached. Click to upgrade your plan."
           >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
-              <circle cx="12" cy="12" r="10" fill="#f59e0b" />
-              <circle cx="12" cy="12" r="7.5" stroke="#ffffff" strokeWidth="1.5" fill="none" />
-              <text x="12" y="16" textAnchor="middle" fill="#ffffff" fontSize="11" fontWeight="bold">C</text>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
             </svg>
-            {userCredits} Credits
-          </div>
-
-          {isQuotaFull && !hasFineDue ? (
-            <button
-              className="btn"
-              style={{
-                background: "linear-gradient(135deg, #6366f1, #4f46e5)",
-                color: "#fff",
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 8,
-              }}
-              onClick={() => setShowUpgradeModal(true)}
-              title="Quota reached. Click to upgrade your plan."
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-              </svg>
-              Upgrade Plan ({activeSlotsCount}/{tier.maxBooks} used)
-            </button>
-          ) : (
-            <button className="btn" onClick={() => handleRequestClick()}>
-              <RequestIcon size={18} /> Request a book
-            </button>
-          )}
-        </div>
+            Upgrade Plan ({activeSlotsCount}/{tier.maxBooks} used)
+          </button>
+        ) : (
+          <button className="btn" onClick={() => handleRequestClick()}>
+            <RequestIcon size={18} /> Request a book
+          </button>
+        )}
       </div>
 
       {/* Notice Banners */}
@@ -299,101 +242,21 @@ export default function PurchaserBooks() {
         >
           {books.map((b) => {
             const isAvailable = b.availableCopies > 0;
-            const digitalAccess = getActiveDigitalAccess(b._id);
-
             return (
               <BookCard
                 key={b._id}
                 book={b}
                 actions={
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%" }}>
-                    {/* ── ACTION 1: Digital Rent / Buy Online ── */}
-                    {digitalAccess ? (
-                      <div
-                        style={{
-                          background: "#ecfdf5",
-                          border: "1px solid #a7f3d0",
-                          color: "#065f46",
-                          padding: "6px 10px",
-                          borderRadius: 6,
-                          fontSize: "0.78rem",
-                          fontWeight: 700,
-                          textAlign: "center",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          gap: 6,
-                        }}
-                      >
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                          <polyline points="20 6 9 17 4 12" />
-                        </svg>
-                        {digitalAccess.text}
-                      </div>
-                    ) : (
-                      <button
-                        className="btn btn-sm"
-                        style={{
-                          background: "linear-gradient(135deg, #10b981, #059669)",
-                          color: "#ffffff",
-                          fontWeight: 700,
-                          fontSize: "0.8rem",
-                          display: "inline-flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          gap: 6,
-                          border: "none",
-                          width: "100%",
-                          padding: "6px 10px",
-                        }}
-                        onClick={() => setDigitalBookTarget(b)}
-                        disabled={b.isDiscontinued}
-                        title="Rent or buy digital access (Day, Week, Year, Lifetime)"
-                      >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
-                          <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
-                        </svg>
-                        Read / Rent Online
-                      </button>
-                    )}
-
-                    {/* ── ACTION 2: Physical Book Loan (Existing Flow) ── */}
-                    {isQuotaFull && !hasFineDue ? (
-                      <button
-                        className="btn btn-sm"
-                        style={{
-                          background: "linear-gradient(135deg, #6366f1, #4f46e5)",
-                          color: "#fff",
-                          fontSize: "0.78rem",
-                          fontWeight: 600,
-                          width: "100%",
-                          display: "inline-flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          gap: 5,
-                          border: "none",
-                        }}
-                        onClick={() => setShowUpgradeModal(true)}
-                        title="Your physical borrowing limit is reached."
-                      >
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                          <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-                        </svg>
-                        Upgrade for Physical Copy
-                      </button>
-                    ) : (
-                      <button
-                        className="btn btn-soft btn-sm"
-                        onClick={() => handleRequestClick(b._id)}
-                        disabled={!isAvailable}
-                        title={!isAvailable ? "Physical copy is out of stock" : "Request physical book"}
-                        style={{ width: "100%", fontSize: "0.78rem" }}
-                      >
-                        <RequestIcon size={14} /> {isAvailable ? "Request Physical" : "Physical Out of Stock"}
-                      </button>
-                    )}
-                  </div>
+                  /* ── SINGLE CLEAN BUTTON AS REQUESTED ── */
+                  <button
+                    className="btn btn-soft btn-sm"
+                    onClick={() => handleRequestClick(b._id)}
+                    disabled={b.isDiscontinued}
+                    title={b.isDiscontinued ? "This book is discontinued" : "Request this book"}
+                    style={{ width: "100%", fontSize: "0.82rem" }}
+                  >
+                    <RequestIcon size={16} /> Request this book
+                  </button>
                 }
               />
             );
@@ -420,19 +283,7 @@ export default function PurchaserBooks() {
         </div>
       )}
 
-      {/* ── Digital Rent / Purchase Modal ── */}
-      {digitalBookTarget && (
-        <DigitalAccessModal
-          book={digitalBookTarget}
-          userCredits={userCredits}
-          onClose={() => setDigitalBookTarget(null)}
-          onSuccess={() => {
-            loadUserQuota();
-          }}
-        />
-      )}
-
-      {/* Physical Request Modal */}
+      {/* Single Unified Modal for Physical Request OR Digital Access */}
       {requestFor && (
         <RequestFormModal
           key={requestFor.bookId || "new"}
@@ -441,7 +292,7 @@ export default function PurchaserBooks() {
           onSaved={() => {
             setRequestFor(null);
             loadUserQuota();
-            toast.info("Track it under My Requests");
+            loadBooks();
           }}
         />
       )}

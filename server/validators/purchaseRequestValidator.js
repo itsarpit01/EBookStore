@@ -10,16 +10,26 @@ const quantitySchema = z
   .int("Quantity must be a whole number")
   .min(1, "At least 1");
 
+// ── Truly Optional Reason Schema ──
+// Agar khali (blank) ho toh accept karega, aur agar user kuch likhe toh valid 5-500 characters hona chahiye
 const reasonSchema = z
-  .string({ error: "Reason is required" })
+  .string()
   .trim()
-  .min(5, "Reason must be at least 5 characters")
-  .max(500, "Max 500 characters");
+  .optional()
+  .or(z.literal(""))
+  .refine(
+    (val) => !val || val.length >= 5,
+    "If provided, reason must be at least 5 characters"
+  )
+  .refine(
+    (val) => !val || val.length <= 500,
+    "Max 500 characters"
+  );
 
 const requestFields = {
   bookId: bookIdSchema,
   quantity: quantitySchema,
-  neededUntil: dueDateSchema, // ab required, "YYYY-MM-DD"
+  neededUntil: dueDateSchema, // required, "YYYY-MM-DD"
   reason: reasonSchema,
 };
 
