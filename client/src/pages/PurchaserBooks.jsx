@@ -9,6 +9,7 @@ import useDebounce from "../hooks/useDebounce";
 import BookCard from "../components/BookCard";
 import RequestFormModal from "../components/RequestFormModal";
 import MembershipModal from "../components/MembershipModal";
+import DigitalAccessModal from "../components/DigitalAccessModal";
 import Modal from "../components/Modal";
 import { SearchIcon, RequestIcon } from "../components/Icons";
 
@@ -37,18 +38,24 @@ export default function PurchaserBooks() {
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [showFineBlockedModal, setShowFineBlockedModal] = useState(false);
 
-  // null = closed, {} = dropdown wala form, { bookId } = specific book modal
+  // Physical Request state
   const [requestFor, setRequestFor] = useState(null);
+
+  // ── Online Digital Rent / Purchase Modal State ──
+  const [digitalBookTarget, setDigitalBookTarget] = useState(null);
+  const [userCredits, setUserCredits] = useState(100);
+  const [myDigitalShelf, setMyDigitalShelf] = useState([]);
 
   const debouncedSearch = useDebounce(search);
   const requestId = useRef(0);
 
-  // User ka current active quota aur unpaid fines load karna
+  // User ka current active quota, unpaid fines aur credits load karna
   const loadUserQuota = useCallback(async () => {
     try {
-      const [reqRes, issueRes] = await Promise.all([
+      const [reqRes, issueRes, shelfRes] = await Promise.all([
         api.get("/purchase-requests/my").catch(() => ({ data: [] })),
         api.get("/issues/my").catch(() => ({ data: [] })),
+        api.get("/books/my-digital-shelf").catch(() => ({ data: { credits: 100, digitalShelf: [] } })),
       ]);
 
       const reqs = Array.isArray(reqRes.data) ? reqRes.data : [];
@@ -59,15 +66,21 @@ export default function PurchaserBooks() {
       const issues = Array.isArray(issueRes.data) ? issueRes.data : [];
       const activeIssues = issues.filter((i) => i.status === "issued").length;
 
-      // Unpaid fines calculation
       const fines = issues
         .filter((i) => !i.finePaid && ((i.currentFine || 0) > 0 || (i.fine || 0) > 0))
         .reduce((sum, i) => sum + (i.currentFine || i.fine || 0), 0);
 
       setActiveSlotsCount(pendingReqs + activeIssues);
       setTotalUnpaidFines(fines);
+
+      if (shelfRes.data?.credits !== undefined) {
+        setUserCredits(shelfRes.data.credits);
+      }
+      if (Array.isArray(shelfRes.data?.digitalShelf)) {
+        setMyDigitalShelf(shelfRes.data.digitalShelf);
+      }
     } catch {
-      // Background check silent
+      // Silent fail fallback
     }
   }, []);
 
@@ -116,7 +129,6 @@ export default function PurchaserBooks() {
     };
   }, [loadUserQuota]);
 
-  // Status checks
   const hasFineDue = totalUnpaidFines > 0;
   const isQuotaFull = tier.maxBooks !== Infinity && activeSlotsCount >= tier.maxBooks;
 
@@ -132,6 +144,18 @@ export default function PurchaserBooks() {
     setRequestFor(bookId ? { bookId } : {});
   };
 
+  // Check if user already owns or rented this book online
+  const getActiveDigitalAccess = (bookId) => {
+    const item = myDigitalShelf.find(
+      (s) => s.book?._id === bookId || s.book === bookId
+    );
+    if (!item) return null;
+    if (!item.expiresAt) return { plan: "lifetime", text: "Owned (Lifetime)" };
+    const isExpired = new Date(item.expiresAt) <= new Date();
+    if (isExpired) return null;
+    return { plan: item.plan, text: `Active (${item.plan.toUpperCase()})` };
+  };
+
   return (
     <>
       <div className="page-head">
@@ -140,32 +164,58 @@ export default function PurchaserBooks() {
           <p>{pagination.total} book(s) in the library.</p>
         </div>
 
-        {isQuotaFull && !hasFineDue ? (
-          <button
-            className="btn"
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          {/* User Credits Pill Badge */}
+          <div
             style={{
-              background: "linear-gradient(135deg, #6366f1, #4f46e5)",
-              color: "#fff",
               display: "inline-flex",
               alignItems: "center",
-              gap: 8,
+              gap: 6,
+              background: "#fef3c7",
+              border: "1px solid #fde68a",
+              color: "#b45309",
+              padding: "6px 12px",
+              borderRadius: 20,
+              fontWeight: 700,
+              fontSize: "0.85rem",
             }}
-            onClick={() => setShowUpgradeModal(true)}
-            title="Quota reached. Click to upgrade your plan."
+            title="Your credits balance for online rent & purchase"
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="10" fill="#f59e0b" />
+              <circle cx="12" cy="12" r="7.5" stroke="#ffffff" strokeWidth="1.5" fill="none" />
+              <text x="12" y="16" textAnchor="middle" fill="#ffffff" fontSize="11" fontWeight="bold">C</text>
             </svg>
-            Upgrade Plan ({activeSlotsCount}/{tier.maxBooks} used)
-          </button>
-        ) : (
-          <button className="btn" onClick={() => handleRequestClick()}>
-            <RequestIcon size={18} /> Request a book
-          </button>
-        )}
+            {userCredits} Credits
+          </div>
+
+          {isQuotaFull && !hasFineDue ? (
+            <button
+              className="btn"
+              style={{
+                background: "linear-gradient(135deg, #6366f1, #4f46e5)",
+                color: "#fff",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
+              }}
+              onClick={() => setShowUpgradeModal(true)}
+              title="Quota reached. Click to upgrade your plan."
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+              </svg>
+              Upgrade Plan ({activeSlotsCount}/{tier.maxBooks} used)
+            </button>
+          ) : (
+            <button className="btn" onClick={() => handleRequestClick()}>
+              <RequestIcon size={18} /> Request a book
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Subtle Notice Banner for Unpaid Fine (Soft amber, non-aggressive) */}
+      {/* Notice Banners */}
       {hasFineDue && (
         <div
           style={{
@@ -182,15 +232,7 @@ export default function PurchaserBooks() {
           }}
         >
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <span
-              style={{
-                width: 8,
-                height: 8,
-                borderRadius: "50%",
-                background: "#f59e0b",
-                display: "inline-block",
-              }}
-            />
+            <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#f59e0b", display: "inline-block" }} />
             <span style={{ fontSize: "0.88rem", color: "var(--text, #333)", fontWeight: 500 }}>
               You have an outstanding late fine of <strong>₹{totalUnpaidFines}</strong>. New book requests are temporarily paused until settled.
             </span>
@@ -201,51 +243,6 @@ export default function PurchaserBooks() {
             onClick={() => navigate("/purchaser/my-issues")}
           >
             Pay in My Issues →
-          </button>
-        </div>
-      )}
-
-      {/* Quota Full Notification Banner */}
-      {!hasFineDue && isQuotaFull && (
-        <div
-          style={{
-            padding: "10px 16px",
-            marginBottom: 16,
-            borderRadius: 8,
-            background: "rgba(99, 102, 241, 0.08)",
-            border: "1px solid #c7d2fe",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            flexWrap: "wrap",
-            gap: 10,
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <span
-              style={{
-                width: 8,
-                height: 8,
-                borderRadius: "50%",
-                background: "#6366f1",
-                display: "inline-block",
-              }}
-            />
-            <span style={{ fontSize: "0.88rem", color: "#3730a3", fontWeight: 500 }}>
-              You have used all <strong>{activeSlotsCount}/{tier.maxBooks} slots</strong> on your <strong>{tier.name} Plan</strong>. Upgrade your membership to borrow or request more books.
-            </span>
-          </div>
-          <button
-            className="btn btn-sm"
-            style={{
-              background: "#4f46e5",
-              color: "#fff",
-              padding: "4px 12px",
-              fontSize: "0.8rem",
-            }}
-            onClick={() => setShowUpgradeModal(true)}
-          >
-            Upgrade Now
           </button>
         </div>
       )}
@@ -302,45 +299,101 @@ export default function PurchaserBooks() {
         >
           {books.map((b) => {
             const isAvailable = b.availableCopies > 0;
+            const digitalAccess = getActiveDigitalAccess(b._id);
+
             return (
               <BookCard
                 key={b._id}
                 book={b}
                 actions={
-                  isQuotaFull && !hasFineDue ? (
-                    <button
-                      className="btn btn-sm"
-                      style={{
-                        background: "linear-gradient(135deg, #6366f1, #4f46e5)",
-                        color: "#fff",
-                        fontSize: "0.8rem",
-                        fontWeight: 600,
-                        width: "100%",
-                        display: "inline-flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        gap: 6,
-                        border: "none",
-                      }}
-                      onClick={() => setShowUpgradeModal(true)}
-                      title="Your borrowing limit is reached. Upgrade your plan to request more books."
-                    >
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                        <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-                      </svg>
-                      Upgrade plan to request more
-                    </button>
-                  ) : (
-                    <button
-                      className="btn btn-soft btn-sm"
-                      onClick={() => handleRequestClick(b._id)}
-                      disabled={!isAvailable}
-                      title={!isAvailable ? "This book is currently out of stock" : "Request this book"}
-                      style={{ width: "100%" }}
-                    >
-                      <RequestIcon size={16} /> {isAvailable ? "Request this book" : "Out of stock"}
-                    </button>
-                  )
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%" }}>
+                    {/* ── ACTION 1: Digital Rent / Buy Online ── */}
+                    {digitalAccess ? (
+                      <div
+                        style={{
+                          background: "#ecfdf5",
+                          border: "1px solid #a7f3d0",
+                          color: "#065f46",
+                          padding: "6px 10px",
+                          borderRadius: 6,
+                          fontSize: "0.78rem",
+                          fontWeight: 700,
+                          textAlign: "center",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          gap: 6,
+                        }}
+                      >
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                        {digitalAccess.text}
+                      </div>
+                    ) : (
+                      <button
+                        className="btn btn-sm"
+                        style={{
+                          background: "linear-gradient(135deg, #10b981, #059669)",
+                          color: "#ffffff",
+                          fontWeight: 700,
+                          fontSize: "0.8rem",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          gap: 6,
+                          border: "none",
+                          width: "100%",
+                          padding: "6px 10px",
+                        }}
+                        onClick={() => setDigitalBookTarget(b)}
+                        disabled={b.isDiscontinued}
+                        title="Rent or buy digital access (Day, Week, Year, Lifetime)"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
+                          <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
+                        </svg>
+                        Read / Rent Online
+                      </button>
+                    )}
+
+                    {/* ── ACTION 2: Physical Book Loan (Existing Flow) ── */}
+                    {isQuotaFull && !hasFineDue ? (
+                      <button
+                        className="btn btn-sm"
+                        style={{
+                          background: "linear-gradient(135deg, #6366f1, #4f46e5)",
+                          color: "#fff",
+                          fontSize: "0.78rem",
+                          fontWeight: 600,
+                          width: "100%",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          gap: 5,
+                          border: "none",
+                        }}
+                        onClick={() => setShowUpgradeModal(true)}
+                        title="Your physical borrowing limit is reached."
+                      >
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                        </svg>
+                        Upgrade for Physical Copy
+                      </button>
+                    ) : (
+                      <button
+                        className="btn btn-soft btn-sm"
+                        onClick={() => handleRequestClick(b._id)}
+                        disabled={!isAvailable}
+                        title={!isAvailable ? "Physical copy is out of stock" : "Request physical book"}
+                        style={{ width: "100%", fontSize: "0.78rem" }}
+                      >
+                        <RequestIcon size={14} /> {isAvailable ? "Request Physical" : "Physical Out of Stock"}
+                      </button>
+                    )}
+                  </div>
                 }
               />
             );
@@ -348,6 +401,7 @@ export default function PurchaserBooks() {
         </div>
       )}
 
+      {/* Pagination */}
       {pagination.totalPages > 1 && (
         <div className="pagination">
           <button className="btn btn-soft btn-sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>
@@ -366,7 +420,19 @@ export default function PurchaserBooks() {
         </div>
       )}
 
-      {/* Book Request Modal */}
+      {/* ── Digital Rent / Purchase Modal ── */}
+      {digitalBookTarget && (
+        <DigitalAccessModal
+          book={digitalBookTarget}
+          userCredits={userCredits}
+          onClose={() => setDigitalBookTarget(null)}
+          onSuccess={() => {
+            loadUserQuota();
+          }}
+        />
+      )}
+
+      {/* Physical Request Modal */}
       {requestFor && (
         <RequestFormModal
           key={requestFor.bookId || "new"}
@@ -387,44 +453,16 @@ export default function PurchaserBooks() {
 
       {/* Fine Blocked Alert Modal */}
       {showFineBlockedModal && (
-        <Modal
-          title="Late Fine Pending"
-          onClose={() => setShowFineBlockedModal(false)}
-        >
+        <Modal title="Late Fine Pending" onClose={() => setShowFineBlockedModal(false)}>
           <div style={{ textAlign: "center", padding: "8px 0" }}>
-            <div
-              style={{
-                width: 48,
-                height: 48,
-                borderRadius: "50%",
-                background: "rgba(245, 158, 11, 0.12)",
-                color: "#d97706",
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-                marginBottom: 12,
-              }}
-            >
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="10" />
-                <line x1="12" y1="8" x2="12" y2="12" />
-                <line x1="12" y1="16" x2="12.01" y2="16" />
-              </svg>
-            </div>
-
             <h3 style={{ margin: "0 0 6px 0", fontSize: "1.2rem" }}>
               Outstanding Fine: ₹{totalUnpaidFines}
             </h3>
             <p style={{ margin: "0 0 16px 0", color: "var(--text-secondary, #666)", fontSize: "0.92rem", lineHeight: 1.5 }}>
               You have an unsettled late fine of ₹{totalUnpaidFines}. Please clear your pending fine in your <strong>My Issues</strong> page to continue borrowing new books.
             </p>
-
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 20 }}>
-              <button
-                type="button"
-                className="btn btn-soft"
-                onClick={() => setShowFineBlockedModal(false)}
-              >
+              <button type="button" className="btn btn-soft" onClick={() => setShowFineBlockedModal(false)}>
                 Cancel
               </button>
               <button

@@ -53,15 +53,13 @@ export const getBooks = async (req, res) => {
   if (category) andConditions.push({ category: new RegExp(`^${escapeRegex(category)}$`, "i") });
   if (author) andConditions.push({ author: new RegExp(escapeRegex(author), "i") });
 
-  // 3. ── AVAILABLE / NOT AVAILABLE / ALL FILTER ──
+  // 3. Available / Not Available / All Filter
   if (available === true) {
-    // ✅ Available: Available copies > 0 honi chahiye AND Discontinued NAHI honi chahiye
     andConditions.push({
       availableCopies: { $gt: 0 },
       isDiscontinued: { $ne: true },
     });
   } else if (available === false) {
-    // ✅ Not Available: 0 copies ho chuki hon YA fir Discontinue ho chuki ho
     andConditions.push({
       $or: [
         { availableCopies: { $lte: 0 } },
@@ -69,10 +67,8 @@ export const getBooks = async (req, res) => {
       ],
     });
   }
-  // Agar available query nahi hai (All books), toh koi condition add nahi hogi -> Saari books aayengi!
 
   const filter = andConditions.length > 0 ? { $and: andConditions } : {};
-
   const sortBy = sort.startsWith("-") ? { [sort.slice(1)]: -1 } : { [sort]: 1 };
 
   const [books, total] = await Promise.all([
@@ -107,9 +103,6 @@ export const createBook = async (req, res) => {
   if (req.file) bookData.coverImage = `/uploads/books/${req.file.filename}`;
 
   const book = await Book.create(bookData);
-
-  // ── Note: Instant broadcast email is disabled. ──
-  // Books are now automatically collected into the weekly Friday digest cron job.
 
   res.status(201).json(book);
 };
@@ -148,7 +141,7 @@ export const updateBook = async (req, res) => {
   Object.assign(book, rest);
 
   if (req.file) {
-    removeFile(book.coverImage); // purani cover hatao
+    removeFile(book.coverImage);
     book.coverImage = `/uploads/books/${req.file.filename}`;
   }
 
@@ -173,7 +166,6 @@ export const deleteBook = async (req, res) => {
 };
 
 // PATCH /api/books/:id/discontinue (librarian)
-// ── Discontinue book with mandatory date, optional reason & 7-day grace return window ──
 export const discontinueBook = async (req, res) => {
   try {
     const { effectiveDate, reason } = req.body;
@@ -187,7 +179,6 @@ export const discontinueBook = async (req, res) => {
       return res.status(404).json({ message: "Book not found" });
     }
 
-    // 1. Mark book as discontinued and zero available copies to stop new issues
     book.isDiscontinued = true;
     book.discontinueReason = reason ? reason.trim() : "Catalog retirement";
     book.discontinuedDate = new Date(effectiveDate);
@@ -196,33 +187,24 @@ export const discontinueBook = async (req, res) => {
 
     console.log(`\n[Discontinue] Book "${book.title}" (ID: ${book._id}) marked as discontinued.`);
 
-    // 2. Find all actively issued copies
     const activeIssues = await Issue.find({
       book: book._id,
       status: "issued",
     }).populate("member", "name email");
 
-    console.log(`[Discontinue] Found ${activeIssues.length} active issue(s) for this book.`);
-
-    // 3. Strictly set 7 days (1 week) return window from today
     const now = new Date();
     const oneWeekDeadline = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-    oneWeekDeadline.setHours(23, 59, 59, 999); // Till end of the 7th day
+    oneWeekDeadline.setHours(23, 59, 59, 999);
 
     let emailSentCount = 0;
 
     for (const issue of activeIssues) {
-      // Har borrower ki due date update karke 7 din ka grace period dete hain
       issue.dueDate = oneWeekDeadline;
       await issue.save();
 
       const member = issue.member;
-
       if (member && member.email) {
         emailSentCount++;
-        console.log(`[Discontinue] Sending notice email to: ${member.email} (${member.name})`);
-
-        // A. Send Targeted Discontinuation Notice Email
         sendBookDiscontinuedEmail({
           to: member.email,
           name: member.name || "Reader",
@@ -234,7 +216,6 @@ export const discontinueBook = async (req, res) => {
           console.error(`[Discontinue] Email error for ${member.email}:`, err.message)
         );
 
-        // B. Send In-App Bell Notification
         sendNotification({
           userId: member._id,
           title: "Urgent: Issued Book Discontinued",
@@ -242,8 +223,6 @@ export const discontinueBook = async (req, res) => {
           type: "danger",
           link: "/purchaser/my-issues",
         }).catch(() => {});
-      } else {
-        console.warn(`[Discontinue] Could not find member email for issue: ${issue._id}`);
       }
     }
 
@@ -257,5 +236,120 @@ export const discontinueBook = async (req, res) => {
   } catch (error) {
     console.error("[Discontinue Error]:", error);
     res.status(500).json({ message: error.message });
+  }
+};
+
+// POST /api/books/:id/digital-access (purchaser)
+export const purchaseOrRentDigitalBook = async (req, res) => {
+  try {
+    const { plan, paymentMode = "credits" } = req.body;
+    const bookId = req.params.id;
+    const userId = req.user.id || req.user._id;
+
+    if (!["day", "week", "year", "lifetime"].includes(plan)) {
+      return res.status(400).json({ message: "Invalid access plan selected" });
+    }
+
+    const book = await Book.findById(bookId);
+    if (!book) return res.status(404).json({ message: "Book not found" });
+
+    if (book.isDiscontinued) {
+      return res.status(400).json({ message: "Discontinued books cannot be rented or purchased" });
+    }
+
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    // Defensive check: Purane existing users ke paas digitalShelf ya credits field na hone par crash avoid karein
+    if (!user.digitalShelf) {
+      user.digitalShelf = [];
+    }
+    if (user.credits === undefined || user.credits === null) {
+      user.credits = 100;
+    }
+
+    // 1. Pricing calculate karein
+    const defaultLifetimeCredits = book.creditPrice || Math.max(1, Math.round((book.price || 100) / 10));
+    const pricingMap = {
+      day: { inr: book.rentalPlans?.day?.inr ?? 20, credits: book.rentalPlans?.day?.credits ?? 2 },
+      week: { inr: book.rentalPlans?.week?.inr ?? 70, credits: book.rentalPlans?.week?.credits ?? 7 },
+      year: { inr: book.rentalPlans?.year?.inr ?? 299, credits: book.rentalPlans?.year?.credits ?? 30 },
+      lifetime: { inr: book.price ?? 499, credits: defaultLifetimeCredits },
+    };
+
+    const cost = pricingMap[plan];
+
+    // 2. Process Payment
+    if (paymentMode === "credits") {
+      if (user.credits < cost.credits) {
+        return res.status(400).json({
+          message: `Insufficient credits. You need ${cost.credits} credits, but have ${user.credits}.`,
+        });
+      }
+      user.credits -= cost.credits;
+    }
+
+    // 3. Expiration Date Calculate karein
+    const now = new Date();
+    let expiresAt = null;
+
+    if (plan === "day") {
+      expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+    } else if (plan === "week") {
+      expiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    } else if (plan === "year") {
+      expiresAt = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000);
+    }
+
+    // 4. Update Digital Shelf
+    const existingIndex = user.digitalShelf.findIndex(
+      (item) => item.book.toString() === bookId.toString()
+    );
+
+    const shelfEntry = {
+      book: bookId,
+      plan,
+      paymentMode,
+      amountPaid: paymentMode === "credits" ? cost.credits : cost.inr,
+      acquiredAt: now,
+      expiresAt,
+    };
+
+    if (existingIndex >= 0) {
+      user.digitalShelf[existingIndex] = shelfEntry;
+    } else {
+      user.digitalShelf.push(shelfEntry);
+    }
+
+    await user.save();
+
+    res.json({
+      success: true,
+      message: `Successfully unlocked "${book.title}" for ${plan.toUpperCase()} access!`,
+      plan,
+      expiresAt,
+      remainingCredits: user.credits,
+      bookTitle: book.title,
+    });
+  } catch (error) {
+    console.error("[Digital Access Error]:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// GET /api/books/my-digital-shelf (purchaser)
+export const getMyDigitalShelf = async (req, res) => {
+  try {
+    const userId = req.user.id || req.user._id;
+    const user = await User.findById(userId).populate("digitalShelf.book");
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    res.json({
+      success: true,
+      credits: user.credits ?? 100,
+      digitalShelf: user.digitalShelf || [],
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
   }
 };
