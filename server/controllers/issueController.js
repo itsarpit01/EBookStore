@@ -47,25 +47,24 @@ export const issueBook = async (req, res) => {
     // Digital copies physical library copies ko decrement nahi karti
     await Book.findByIdAndUpdate(bookId, { $inc: { availableCopies: 1 } });
 
-    // ⭐ DEDUCT CREDITS & ACTIVATE DIGITAL SHELF NOW UPON ISSUE CONFIRMATION ⭐
+    // ⭐ DEDUCT CREDITS & ACTIVATE DIGITAL SHELF UPON ISSUE CONFIRMATION ⭐
     if (paymentMode === "credits" && !requestDoc?.creditsDeducted) {
       const userDoc = await User.findById(memberId);
       if (userDoc) {
+        // Naye rates: 1 Day = 10, 1 Week = 50, 1 Year = 70, Lifetime = 150
         let cost = requestDoc?.creditCost || 0;
         if (!cost || cost <= 0) {
-          const bookDoc = await Book.findById(bookId);
-          const baseCredits = bookDoc?.creditPrice || Math.max(1, Math.round((bookDoc?.price || 100) / 10));
           const plan = digitalPlan || "week";
-          if (plan === "day") cost = Math.max(1, Math.round(baseCredits * 0.1));
-          else if (plan === "week") cost = Math.max(5, Math.round(baseCredits * 0.25));
-          else if (plan === "year") cost = Math.max(15, Math.round(baseCredits * 0.75));
-          else cost = baseCredits;
+          if (plan === "day") cost = 10;
+          else if (plan === "week") cost = 50;
+          else if (plan === "year") cost = 70;
+          else cost = 150;
         }
 
-        // Deduct credits
+        // Deduct credits from wallet
         userDoc.credits = Math.max(0, (userDoc.credits ?? 100) - cost);
 
-        // Add to digital shelf
+        // Add book to digital shelf
         userDoc.digitalShelf = userDoc.digitalShelf || [];
         let expiresAt = new Date(dueDate);
         if (digitalPlan === "lifetime") expiresAt = null;
@@ -105,7 +104,7 @@ export const issueBook = async (req, res) => {
 
   const populated = await populateIssue(Issue.findById(issue._id));
 
-  // Notification: Clean words only (no icons/emojis)
+  // Notification: Clean plain text only (no emojis/icons)
   sendNotification({
     userId: memberId,
     title: isDigital ? "Digital Book Issued" : "Book Issued",

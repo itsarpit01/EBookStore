@@ -10,8 +10,8 @@ import { PlusIcon, ReturnIcon, SearchIcon } from "../components/Icons";
 
 const TABS = [
   { key: "", label: "All" },
-  { key: "issued", label: "Issued" },
-  { key: "reissue_requested", label: "Reissue Requests" },
+  { key: "issued", label: "Active Issued" },
+  { key: "digital", label: "Digital Access" },
   { key: "overdue", label: "Overdue" },
   { key: "returned", label: "Returned" },
 ];
@@ -21,6 +21,7 @@ export default function LibrarianIssues() {
 
   const [issues, setIssues] = useState([]);
   const [tab, setTab] = useState("");
+  const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
 
   const [showForm, setShowForm] = useState(false);
@@ -28,44 +29,13 @@ export default function LibrarianIssues() {
   const [toReissue, setToReissue] = useState(null);
   const [returning, setReturning] = useState(false);
 
-  // Search & Date Range (client-side)
-  const [searchQuery, setSearchQuery] = useState("");
-  const [startDate, setStartDate] = useState("");
-  const [endDate, setEndDate] = useState("");
-
-  const filteredIssues = useMemo(() => {
-    const todayStr = new Date().toISOString().slice(0, 10);
-    return issues.filter((i) => {
-      if (tab === "reissue_requested" && !i.reissueRequested) return false;
-
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase();
-        const matchTitle = i.book?.title?.toLowerCase().includes(q);
-        const matchAuthor = i.book?.author?.toLowerCase().includes(q);
-        const matchIsbn = i.book?.isbn?.toLowerCase().includes(q);
-        const matchMember = i.member?.name?.toLowerCase().includes(q);
-        const matchEmail = i.member?.email?.toLowerCase().includes(q);
-        if (!matchTitle && !matchAuthor && !matchIsbn && !matchMember && !matchEmail) return false;
-      }
-      if (startDate || endDate) {
-        const d = i.issueDate ? new Date(i.issueDate).toISOString().slice(0, 10) : "";
-        const from = startDate || "1970-01-01";
-        const to = endDate || todayStr;
-        if (d < from || d > to) return false;
-      }
-      return true;
-    });
-  }, [issues, tab, searchQuery, startDate, endDate]);
-
-  const clearDateRange = () => {
-    setStartDate("");
-    setEndDate("");
-  };
-
   const loadIssues = useCallback(async () => {
     setLoading(true);
     try {
-      const params = tab ? { status: tab } : {};
+      const params = {};
+      if (tab && tab !== "digital") {
+        params.status = tab;
+      }
       const res = await api.get("/issues", { params });
       setIssues(Array.isArray(res.data) ? res.data : res.data.data || []);
     } catch (err) {
@@ -75,24 +45,8 @@ export default function LibrarianIssues() {
     }
   }, [tab, toast]);
 
-  // Real-time Auto-Sync every 8 seconds without hard refresh
   useEffect(() => {
     loadIssues();
-    const interval = setInterval(loadIssues, 60000);
-    return () => clearInterval(interval);
-  }, [loadIssues]);
-
-  // Tab switch par immediate refresh
-  useEffect(() => {
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") loadIssues();
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-    window.addEventListener("focus", loadIssues);
-    return () => {
-      document.removeEventListener("visibilitychange", onVisibility);
-      window.removeEventListener("focus", loadIssues);
-    };
   }, [loadIssues]);
 
   const handleIssued = () => {
@@ -110,7 +64,7 @@ export default function LibrarianIssues() {
     try {
       const res = await api.patch(`/issues/${toReturn._id}/return`);
       const fine = res.data.fine ?? res.data.currentFine ?? 0;
-      toast.success(fine > 0 ? `Book returned. Fine: ₹${fine}` : "Book returned");
+      toast.success(fine > 0 ? `Book returned. Fine: Rs. ${fine}` : "Book returned successfully");
       setToReturn(null);
       loadIssues();
     } catch (err) {
@@ -121,261 +75,235 @@ export default function LibrarianIssues() {
     }
   };
 
-  const renderTierBadge = (membership) => {
-    const tier = membership?.tier || "free";
-    if (tier === "ultimate") {
-      return (
-        <span
-          className="badge"
-          style={{
-            background: "linear-gradient(135deg, #f59e0b, #d97706)",
-            color: "#fff",
-            fontSize: "0.72rem",
-            fontWeight: 700,
-            padding: "2px 7px",
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 4,
-          }}
-        >
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-          </svg>
-          Ultimate
-        </span>
-      );
-    }
-    if (tier === "premium") {
-      return (
-        <span
-          className="badge"
-          style={{
-            background: "linear-gradient(135deg, #6366f1, #4338ca)",
-            color: "#fff",
-            fontSize: "0.72rem",
-            fontWeight: 700,
-            padding: "2px 7px",
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 4,
-          }}
-        >
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-          </svg>
-          Premium
-        </span>
-      );
-    }
-    return (
-      <span
-        className="badge"
-        style={{
-          background: "var(--card-bg, #f3f4f6)",
-          color: "var(--text-secondary, #6b7280)",
-          fontSize: "0.72rem",
-          border: "1px solid var(--border, #d1d5db)",
-          padding: "2px 7px",
-        }}
-      >
-        Free
-      </span>
-    );
-  };
-
   const statusBadge = (i) => {
     if (i.status === "returned") return <span className="badge badge-success">Returned</span>;
-    if (i.isOverdue) return <span className="badge badge-danger">Overdue</span>;
-    if (i.reissueRequested) {
-      return (
-        <span className="badge" style={{ backgroundColor: "#fff3e0", color: "#e65100", border: "1px solid #ffb74d" }}>
-          Reissue Requested
-        </span>
-      );
-    }
-    if (i.reissueCount > 0) {
+    if (i.accessMode === "digital") {
       return (
         <span
           className="badge"
-          style={{ backgroundColor: "var(--primary-subtle, #ede7f6)", color: "var(--primary, #5c6bc0)", border: "1px solid var(--primary, #5c6bc0)" }}
+          style={{
+            background: "#ecfdf5",
+            color: "#065f46",
+            border: "1px solid #a7f3d0",
+            fontWeight: 700,
+          }}
         >
-          Reissued
+          Digital Active
         </span>
       );
     }
+    if (i.isOverdue) return <span className="badge badge-danger">Overdue</span>;
     return <span className="badge badge-warning">Issued</span>;
   };
+
+  // Filter by Tab and Search
+  const filteredIssues = useMemo(() => {
+    return issues.filter((i) => {
+      // Tab filter
+      if (tab === "digital" && i.accessMode !== "digital") return false;
+
+      // Search filter
+      if (search.trim()) {
+        const q = search.toLowerCase();
+        const matchTitle = i.book?.title?.toLowerCase().includes(q);
+        const matchMember = i.member?.name?.toLowerCase().includes(q) || i.member?.email?.toLowerCase().includes(q);
+        const matchMode = i.accessMode?.toLowerCase().includes(q) || i.digitalPlan?.toLowerCase().includes(q);
+        if (!matchTitle && !matchMember && !matchMode) return false;
+      }
+
+      return true;
+    });
+  }, [issues, tab, search]);
 
   return (
     <>
       <div className="page-head">
         <div>
-          <h2>Issue / Return</h2>
-          <p>Issue books to members and take them back.</p>
+          <h2>Issue & Digital Lending Records</h2>
+          <p>Track all physical copies and active digital access durations per member.</p>
         </div>
         <button className="btn" onClick={() => setShowForm(true)}>
-          <PlusIcon size={18} /> Issue book
+          <PlusIcon size={18} /> Issue physical book
         </button>
       </div>
 
-      <div className="tabs">
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            type="button"
-            className={`tab ${tab === t.key ? "active" : ""}`}
-            onClick={() => setTab(t.key)}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-
-      {/* Search & Date Range Toolbar */}
-      <div
-        className="toolbar"
-        style={{
-          display: "flex",
-          gap: 10,
-          alignItems: "center",
-          flexWrap: "nowrap",
-          overflowX: "auto",
-          paddingBottom: 4,
-          marginBottom: 16,
-        }}
-      >
-        <div className="search-box" style={{ maxWidth: 260, minWidth: 180, flex: "0 1 260px" }}>
-          <SearchIcon size={16} />
-          <input
-            placeholder="Search book, member, ISBN..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-          />
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+        <div className="tabs" style={{ marginBottom: 0 }}>
+          {TABS.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              className={`tab ${tab === t.key ? "active" : ""}`}
+              onClick={() => setTab(t.key)}
+            >
+              {t.label}
+            </button>
+          ))}
         </div>
 
-        <div
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 6,
-            flexWrap: "nowrap",
-            whiteSpace: "nowrap",
-            background: "var(--card-bg, #f9fafb)",
-            padding: "4px 8px",
-            borderRadius: 8,
-            border: "1px solid var(--border, #e5e7eb)",
-            flexShrink: 0,
-          }}
-        >
-          <span style={{ fontSize: "0.8rem", color: "var(--text-secondary, #666)", fontWeight: 600 }}>From:</span>
+        {/* Quick Search Bar */}
+        <div style={{ position: "relative", minWidth: 240 }}>
           <input
-            type="date"
-            className="toolbar-input"
-            value={startDate}
-            onChange={(e) => setStartDate(e.target.value)}
-            style={{ width: 125, padding: "4px 6px", fontSize: "0.8rem" }}
-            title="Issue date from"
+            type="text"
+            placeholder="Search book, member, email..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            style={{
+              padding: "7px 10px 7px 32px",
+              borderRadius: 8,
+              border: "1px solid #cbd5e1",
+              fontSize: "0.85rem",
+              width: "100%",
+            }}
           />
-          <span style={{ fontSize: "0.8rem", color: "var(--text-secondary, #666)", fontWeight: 600 }}>To:</span>
-          <input
-            type="date"
-            className="toolbar-input"
-            value={endDate}
-            onChange={(e) => setEndDate(e.target.value)}
-            style={{ width: 125, padding: "4px 6px", fontSize: "0.8rem" }}
-            title="Issue date to (leave blank for today)"
-          />
-          {(startDate || endDate) && (
-            <button
-              type="button"
-              onClick={clearDateRange}
-              style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-secondary, #888)", padding: "0 2px", fontSize: 16, lineHeight: 1 }}
-              title="Clear date range"
-            >✕</button>
-          )}
+          <div style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "#94a3b8" }}>
+            <SearchIcon size={15} />
+          </div>
         </div>
       </div>
 
       {loading ? (
-        <p className="empty">Loading...</p>
+        <p className="empty">Loading records...</p>
       ) : filteredIssues.length === 0 ? (
-        <p className="empty">No records found.</p>
+        <p className="empty">No issue records found.</p>
       ) : (
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
                 <th>Book</th>
+                <th>Access Type</th>
                 <th>Member</th>
-                <th>Issued</th>
-                <th>Due</th>
-                <th>Returned</th>
+                <th>Issued On</th>
+                <th>Duration / Due</th>
                 <th>Status</th>
                 <th>Fine</th>
-                <th></th>
+                <th style={{ textAlign: "right" }}>Action</th>
               </tr>
             </thead>
             <tbody>
-              {filteredIssues.map((i) => (
-                <tr key={i._id}>
-                  <td>
-                    {i.book?.title}
-                    <span className="cell-sub">{i.book?.author}</span>
-                  </td>
-                  <td>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      <span>{i.member?.name}</span>
-                      {renderTierBadge(i.member?.membership)}
-                    </div>
-                    <span className="cell-sub">{i.member?.email}</span>
-                  </td>
-                  <td>{formatDate(i.issueDate)}</td>
-                  <td>
-                    {formatDate(i.dueDate)}
-                    {i.reissueCount > 0 && (
-                      <span className="cell-sub">Reissued {i.reissueCount}x</span>
-                    )}
-                  </td>
-                  <td>{formatDate(i.returnDate)}</td>
-                  <td>{statusBadge(i)}</td>
+              {filteredIssues.map((i) => {
+                const isDigital = i.accessMode === "digital";
+                const isLifetime = i.digitalPlan === "lifetime";
 
-                  {/* Fine Column showing Paid status or dynamic unpaid amount */}
-                  <td style={{ whiteSpace: "nowrap" }}>
-                    {i.finePaid ? (
-                      <span
-                        className="badge badge-success"
-                        style={{ fontSize: "0.72rem", padding: "2px 8px" }}
-                        title={`Fine settled on ${formatDate(i.finePaidAt)}`}
-                      >
-                        Paid (₹{i.rawFine || i.fine})
-                      </span>
-                    ) : i.currentFine > 0 ? (
-                      <span style={{ color: "#dc2626", fontWeight: 700 }}>₹{i.currentFine}</span>
-                    ) : (
-                      "-"
-                    )}
-                  </td>
+                return (
+                  <tr key={i._id}>
+                    <td>
+                      <div style={{ fontWeight: 600 }}>{i.book?.title || "Unknown Book"}</div>
+                      <span className="cell-sub">{i.book?.author || "Unknown Author"}</span>
+                    </td>
 
-                  <td>
-                    {i.status === "issued" && (
-                      <div style={{ display: "flex", gap: 6 }}>
-                        {i.reissueRequested && (
-                          <button
-                            className="btn btn-sm"
-                            onClick={() => setToReissue(i)}
-                            title={`Member requested extension till ${formatDate(i.reissueRequestedDate)}`}
-                          >
-                            Review Reissue
-                          </button>
-                        )}
-                        <button className="btn btn-soft btn-sm" onClick={() => setToReturn(i)}>
-                          <ReturnIcon size={16} /> Return
-                        </button>
-                      </div>
-                    )}
-                  </td>
-                </tr>
-              ))}
+                    <td>
+                      {isDigital ? (
+                        <span
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 4,
+                            padding: "3px 8px",
+                            borderRadius: 6,
+                            background: "#ecfdf5",
+                            color: "#065f46",
+                            border: "1px solid #a7f3d0",
+                            fontSize: "0.76rem",
+                            fontWeight: 700,
+                          }}
+                        >
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                            <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
+                            <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
+                          </svg>
+                          Digital ({i.digitalPlan ? i.digitalPlan.toUpperCase() : "PASS"})
+                        </span>
+                      ) : (
+                        <span
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 4,
+                            padding: "3px 8px",
+                            borderRadius: 6,
+                            background: "#eef2ff",
+                            color: "#3730a3",
+                            border: "1px solid #c7d2fe",
+                            fontSize: "0.76rem",
+                            fontWeight: 700,
+                          }}
+                        >
+                          Physical Copy
+                        </span>
+                      )}
+                    </td>
+
+                    <td>
+                      <div style={{ fontWeight: 500 }}>{i.member?.name || "Member"}</div>
+                      <span className="cell-sub">{i.member?.email}</span>
+                    </td>
+
+                    <td>{formatDate(i.issueDate)}</td>
+
+                    <td>
+                      {isLifetime ? (
+                        <span
+                          style={{
+                            color: "#059669",
+                            fontWeight: 700,
+                            fontSize: "0.82rem",
+                            background: "#f0fdf4",
+                            padding: "2px 6px",
+                            borderRadius: 4,
+                          }}
+                        >
+                          Lifetime Access
+                        </span>
+                      ) : (
+                        <div>
+                          <div>{formatDate(i.dueDate)}</div>
+                          {i.reissueCount > 0 && (
+                            <span className="cell-sub">Reissued {i.reissueCount}x</span>
+                          )}
+                        </div>
+                      )}
+                    </td>
+
+                    <td>{statusBadge(i)}</td>
+
+                    <td>
+                      {isDigital ? (
+                        <span style={{ color: "#94a3b8", fontSize: "0.8rem" }}>N/A (Digital)</span>
+                      ) : i.currentFine > 0 ? (
+                        <strong style={{ color: "var(--danger, #e53935)" }}>Rs. {i.currentFine}</strong>
+                      ) : (
+                        "-"
+                      )}
+                    </td>
+
+                    <td style={{ textAlign: "right" }}>
+                      {i.status === "issued" && (
+                        <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                          {!isDigital && (
+                            <>
+                              {i.canReissue && (
+                                <button className="btn btn-soft btn-sm" onClick={() => setToReissue(i)}>
+                                  Reissue
+                                </button>
+                              )}
+                              <button className="btn btn-soft btn-sm" onClick={() => setToReturn(i)}>
+                                <ReturnIcon size={16} /> Return
+                              </button>
+                            </>
+                          )}
+                          {isDigital && (
+                            <span style={{ fontSize: "0.76rem", color: "#64748b", fontStyle: "italic" }}>
+                              Self-managed
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -395,12 +323,11 @@ export default function LibrarianIssues() {
       {toReturn && (
         <Modal title="Return book" onClose={() => setToReturn(null)}>
           <p>
-            Mark <strong>{toReturn.book?.title}</strong> as returned by{" "}
-            <strong>{toReturn.member?.name}</strong> {renderTierBadge(toReturn.member?.membership)}?
+            Mark <strong>{toReturn.book?.title}</strong> as returned by <strong>{toReturn.member?.name}</strong>?
           </p>
           {toReturn.currentFine > 0 && (
             <p style={{ marginTop: 10 }}>
-              <span className="badge badge-danger">Late fine: ₹{toReturn.currentFine}</span>
+              <span className="badge badge-danger">Late fine: Rs. {toReturn.currentFine}</span>
             </p>
           )}
           <div className="modal-actions">

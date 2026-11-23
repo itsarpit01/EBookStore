@@ -93,18 +93,17 @@ export default function RequestFormModal({ initial = {}, request, onClose, onSav
 
   const selected = books.find((b) => b._id === form.bookId);
 
-  // Digital Pricing Map
-  const lifetimeCredits = selected?.creditPrice || Math.max(1, Math.round((selected?.price || 100) / 10));
+  // Digital Pricing tiers (1 Day = 10, 1 Week = 50, 1 Year = 70, Lifetime = 150)
   const digitalPlans = [
-    { id: "day", title: "1 Day Pass", inr: selected?.rentalPlans?.day?.inr ?? 20, credits: selected?.rentalPlans?.day?.credits ?? 2, desc: "24 Hours Access", days: 1 },
-    { id: "week", title: "1 Week Pass", inr: selected?.rentalPlans?.week?.inr ?? 70, credits: selected?.rentalPlans?.week?.credits ?? 7, desc: "7 Days Access", days: 7 },
-    { id: "year", title: "1 Year Pass", inr: selected?.rentalPlans?.year?.inr ?? 299, credits: selected?.rentalPlans?.year?.credits ?? 30, desc: "365 Days Access", days: 365 },
-    { id: "lifetime", title: "Lifetime Buy", inr: selected?.price || 499, credits: lifetimeCredits, desc: "Permanent Ownership", days: 3650 },
+    { id: "day", title: "1 Day Pass", inr: selected?.rentalPlans?.day?.inr ?? 20, credits: 10, desc: "24 Hours Access", days: 1 },
+    { id: "week", title: "1 Week Pass", inr: selected?.rentalPlans?.week?.inr ?? 70, credits: 50, desc: "7 Days Access", days: 7 },
+    { id: "year", title: "1 Year Pass", inr: selected?.rentalPlans?.year?.inr ?? 299, credits: 70, desc: "365 Days Access", days: 365 },
+    { id: "lifetime", title: "Lifetime Buy", inr: selected?.price || 499, credits: 150, desc: "Permanent Ownership", days: 3650 },
   ];
   const currentPlan = digitalPlans.find((p) => p.id === digitalPlan) || digitalPlans[1];
   const hasEnoughCredits = userCredits >= currentPlan.credits;
 
-  // Physical Limit Checks
+  // Physical Borrow Limits
   const activeRequestsCount = myRequests.filter(
     (r) => ["pending", "counter_offered"].includes(r.status)
   ).length;
@@ -147,41 +146,21 @@ export default function RequestFormModal({ initial = {}, request, onClose, onSav
       return;
     }
 
-    // ── DIGITAL ACCESS REQUEST ──
+    // ── 1. DIGITAL: DIRECT PAYMENT & INSTANT UNLOCK (NO REQUEST / NO WAITING) ──
     if (accessMode === "digital") {
       if (paymentMode === "credits" && !hasEnoughCredits) {
-        toast.error(`Insufficient credits! You need ${currentPlan.credits} credits.`);
+        toast.error(`Insufficient credits. You need ${currentPlan.credits} credits.`);
         return;
       }
 
       setSaving(true);
       try {
-        const d = new Date();
-        d.setDate(d.getDate() + currentPlan.days);
-        const neededUntilDate = toDateInput(d);
-
-        const effectiveReason = form.reason?.trim()
-          ? form.reason.trim()
-          : `Digital ${currentPlan.title} Access`;
-
-        await api.post("/purchase-requests", {
-          bookId: form.bookId,
-          quantity: 1,
-          neededUntil: neededUntilDate,
-          reason: effectiveReason,
-          accessMode: "digital",
-          digitalPlan,
+        const res = await api.post(`/books/${form.bookId}/digital-access`, {
+          plan: digitalPlan,
           paymentMode,
-          creditCost: paymentMode === "credits" ? currentPlan.credits : 0,
         });
 
-        // 100% WORDS ONLY - ZERO EMOJIS OR ICONS
-        toast.success(
-          paymentMode === "credits"
-            ? `Digital access requested (${currentPlan.credits} Credits). Waiting for librarian approval.`
-            : "Digital access request submitted. Waiting for librarian approval."
-        );
-
+        toast.success(res.data?.message || `"${selected?.title || "Book"}" unlocked successfully.`);
         window.dispatchEvent(new Event("quota-updated"));
         onSaved();
       } catch (err) {
@@ -192,11 +171,10 @@ export default function RequestFormModal({ initial = {}, request, onClose, onSav
       return;
     }
 
-    // ── PHYSICAL BORROW REQUEST ──
+    // ── 2. PHYSICAL: BORROW REQUEST FOR DESK ISSUANCE ──
     if (existingActiveRequest || isLimitReached) return;
 
     const effectiveReason = form.reason?.trim() ? form.reason.trim() : "Borrow for study and reading";
-
     const formToValidate = {
       ...form,
       reason: effectiveReason,
@@ -231,7 +209,7 @@ export default function RequestFormModal({ initial = {}, request, onClose, onSav
           reason: effectiveReason,
           accessMode: "physical",
         });
-        toast.success("Physical request submitted");
+        toast.success("Physical borrow request submitted for librarian review.");
       }
       onSaved();
     } catch (err) {
@@ -243,7 +221,7 @@ export default function RequestFormModal({ initial = {}, request, onClose, onSav
     }
   };
 
-  const modalTitle = isEdit ? "Edit Book Request" : "Request a Book";
+  const modalTitle = isEdit ? "Edit Book Request" : "Request / Access Book";
   const isApproved = existingActiveRequest?.status === "approved";
 
   return (
@@ -252,7 +230,7 @@ export default function RequestFormModal({ initial = {}, request, onClose, onSav
         <form onSubmit={submit} noValidate>
           {formError && <div className="alert-error">{formError}</div>}
 
-          {/* Book Info Header */}
+          {/* Book Select */}
           <div className="field">
             <label htmlFor="bookId">Book</label>
             {isLocked ? (
@@ -276,13 +254,13 @@ export default function RequestFormModal({ initial = {}, request, onClose, onSav
             {errors.bookId && <span className="error-text">{errors.bookId}</span>}
           </div>
 
-          {/* STEP 1: CHOOSE ACCESS MODE (Only Clean Inline SVGs) */}
+          {/* Step 1: Mode Switcher */}
           <div className="field" style={{ margin: "14px 0" }}>
             <label style={{ fontWeight: 800, fontSize: "0.92rem", color: "#0f172a", marginBottom: 8, display: "block" }}>
-              How do you want to take this book?
+              How do you want to access this book?
             </label>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              {/* Option 1: Physical Borrow */}
+              {/* Physical Borrow Option */}
               <div
                 onClick={() => setAccessMode("physical")}
                 style={{
@@ -301,11 +279,11 @@ export default function RequestFormModal({ initial = {}, request, onClose, onSav
                   Physical Borrow
                 </div>
                 <div style={{ fontSize: "0.74rem", color: "#64748b", marginTop: 4 }}>
-                  Issue paper copy from library desk
+                  Submit request for library desk pickup
                 </div>
               </div>
 
-              {/* Option 2: Digital Access */}
+              {/* Digital Rent/Buy Option */}
               <div
                 onClick={() => setAccessMode("digital")}
                 style={{
@@ -325,13 +303,13 @@ export default function RequestFormModal({ initial = {}, request, onClose, onSav
                   Digital Rent / Buy
                 </div>
                 <div style={{ fontSize: "0.74rem", color: "#64748b", marginTop: 4 }}>
-                  Online reading via Credits or Money
+                  Instant access via Credits or Cash
                 </div>
               </div>
             </div>
           </div>
 
-          {/* STEP 2A: DIGITAL DURATION & PAYMENT */}
+          {/* Step 2A: Digital Options (Instant Payment) */}
           {accessMode === "digital" && (
             <div
               style={{
@@ -394,7 +372,7 @@ export default function RequestFormModal({ initial = {}, request, onClose, onSav
                 </button>
               </div>
 
-              {/* 4 Plan Durations */}
+              {/* 4 Plans */}
               <label style={{ fontSize: "0.82rem", fontWeight: 700, color: "#334155", marginBottom: 6, display: "block" }}>
                 Select Rental / Purchase Duration:
               </label>
@@ -423,16 +401,26 @@ export default function RequestFormModal({ initial = {}, request, onClose, onSav
                 })}
               </div>
 
-              <div style={{ fontSize: "0.75rem", color: "#64748b", marginTop: 10 }}>
-                Request will be sent to the librarian. Upon approval, credits will be deducted and book will be active under My Issues.
+              <div
+                style={{
+                  fontSize: "0.78rem",
+                  color: "#047857",
+                  background: "#ecfdf5",
+                  border: "1px solid #a7f3d0",
+                  padding: "8px 10px",
+                  borderRadius: 6,
+                  marginTop: 12,
+                  lineHeight: "1.35",
+                }}
+              >
+                Instant Access: No librarian approval needed. Payment is processed directly and the book is immediately available in your Digital Shelf and My Issues.
               </div>
             </div>
           )}
 
-          {/* STEP 2B: PHYSICAL QUANTITY & NEEDED UNTIL */}
+          {/* Step 2B: Physical Quantity & Needed Until */}
           {accessMode === "physical" && (
             <>
-              {/* Quantity */}
               <div className="field">
                 <label htmlFor="quantity">Quantity</label>
                 <input
@@ -451,7 +439,6 @@ export default function RequestFormModal({ initial = {}, request, onClose, onSav
                 ) : null}
               </div>
 
-              {/* Needed until */}
               <div className="field">
                 <label htmlFor="neededUntil">Needed until</label>
                 <input
@@ -476,7 +463,6 @@ export default function RequestFormModal({ initial = {}, request, onClose, onSav
                 )}
               </div>
 
-              {/* Physical Borrow Warnings */}
               {isLimitReached && (
                 <div
                   style={{
@@ -508,29 +494,29 @@ export default function RequestFormModal({ initial = {}, request, onClose, onSav
                 >
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <strong style={{ color: isApproved ? "#15803d" : "#ed6c02", fontSize: 13 }}>
-                      Active physical request exists!
+                      Active physical request exists
                     </strong>
                     {statusBadge(existingActiveRequest.status)}
                   </div>
                 </div>
               )}
+
+              {/* Reason only for Physical Borrow */}
+              <div className="field">
+                <label htmlFor="reason">Reason (Optional)</label>
+                <textarea
+                  id="reason"
+                  name="reason"
+                  rows={2}
+                  value={form.reason}
+                  onChange={change}
+                  placeholder="Why do you need this book?"
+                />
+              </div>
             </>
           )}
 
-          {/* Reason Field */}
-          <div className="field">
-            <label htmlFor="reason">Reason (Optional)</label>
-            <textarea
-              id="reason"
-              name="reason"
-              rows={2}
-              value={form.reason}
-              onChange={change}
-              placeholder="Why do you need this book?"
-            />
-          </div>
-
-          {/* Submit Actions */}
+          {/* Action Buttons */}
           <div className="modal-actions">
             <button type="button" className="btn btn-soft" onClick={onClose}>
               Cancel
@@ -550,11 +536,13 @@ export default function RequestFormModal({ initial = {}, request, onClose, onSav
               }
             >
               {saving
-                ? "Processing..."
+                ? "Unlocking..."
                 : accessMode === "digital"
                 ? paymentMode === "credits"
-                  ? `Request Access (${currentPlan.credits} Credits)`
-                  : `Request Access (Rs. ${currentPlan.inr})`
+                  ? hasEnoughCredits
+                    ? `Pay ${currentPlan.credits} Credits & Read Now`
+                    : `Insufficient Credits (${currentPlan.credits} needed)`
+                  : `Pay Rs. ${currentPlan.inr} & Read Now`
                 : isEdit
                 ? "Update Request"
                 : "Submit Physical Request"}

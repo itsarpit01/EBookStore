@@ -239,7 +239,7 @@ export const discontinueBook = async (req, res) => {
   }
 };
 
-// POST /api/books/:id/digital-access (purchaser)
+// POST /api/books/:id/digital-access (purchaser: direct instant unlock + librarian tracking)
 export const purchaseOrRentDigitalBook = async (req, res) => {
   try {
     const { plan, paymentMode = "credits" } = req.body;
@@ -260,7 +260,7 @@ export const purchaseOrRentDigitalBook = async (req, res) => {
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    // Defensive check: Purane existing users ke paas digitalShelf ya credits field na hone par crash avoid karein
+    // Defensive guards for older records
     if (!user.digitalShelf) {
       user.digitalShelf = [];
     }
@@ -268,37 +268,31 @@ export const purchaseOrRentDigitalBook = async (req, res) => {
       user.credits = 100;
     }
 
-    // 1. Pricing calculate karein
-    const defaultLifetimeCredits = book.creditPrice || Math.max(1, Math.round((book.price || 100) / 10));
+    // 1. Updated Pricing Map: 1 Day = 10, 1 Week = 50, 1 Year = 70, Lifetime = 150
     const pricingMap = {
-      day: { inr: book.rentalPlans?.day?.inr ?? 20, credits: book.rentalPlans?.day?.credits ?? 2 },
-      week: { inr: book.rentalPlans?.week?.inr ?? 70, credits: book.rentalPlans?.week?.credits ?? 7 },
-      year: { inr: book.rentalPlans?.year?.inr ?? 299, credits: book.rentalPlans?.year?.credits ?? 30 },
-      lifetime: { inr: book.price ?? 499, credits: defaultLifetimeCredits },
+      day: { inr: book.rentalPlans?.day?.inr ?? 20, credits: 10, days: 1 },
+      week: { inr: book.rentalPlans?.week?.inr ?? 70, credits: 50, days: 7 },
+      year: { inr: book.rentalPlans?.year?.inr ?? 299, credits: 70, days: 365 },
+      lifetime: { inr: book.price ?? 499, credits: 150, days: 3650 },
     };
 
     const cost = pricingMap[plan];
 
-    // 2. Process Payment
+    // 2. Process Credit / Cash Payment
     if (paymentMode === "credits") {
       if (user.credits < cost.credits) {
         return res.status(400).json({
           message: `Insufficient credits. You need ${cost.credits} credits, but have ${user.credits}.`,
         });
       }
-      user.credits -= cost.credits;
+      user.credits = Math.max(0, user.credits - cost.credits);
     }
 
-    // 3. Expiration Date Calculate karein
+    // 3. Expiration calculation
     const now = new Date();
     let expiresAt = null;
-
-    if (plan === "day") {
-      expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-    } else if (plan === "week") {
-      expiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-    } else if (plan === "year") {
-      expiresAt = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000);
+    if (plan !== "lifetime") {
+      expiresAt = new Date(now.getTime() + cost.days * 24 * 60 * 60 * 1000);
     }
 
     // 4. Update Digital Shelf
@@ -323,6 +317,43 @@ export const purchaseOrRentDigitalBook = async (req, res) => {
 
     await user.save();
 
+    // 5. Create or Update Issue record so Librarian has complete tracking of user & duration
+    const issueDueDate = expiresAt || new Date(Date.now() + 3650 * 24 * 60 * 60 * 1000);
+    const existingIssue = await Issue.findOne({
+      book: bookId,
+      member: userId,
+      status: "issued",
+    });
+
+    if (existingIssue) {
+      existingIssue.dueDate = issueDueDate;
+      existingIssue.accessMode = "digital";
+      existingIssue.digitalPlan = plan;
+      existingIssue.paymentMode = paymentMode;
+      await existingIssue.save();
+    } else {
+      await Issue.create({
+        book: bookId,
+        member: userId,
+        issuedBy: userId,
+        issueDate: now,
+        dueDate: issueDueDate,
+        status: "issued",
+        accessMode: "digital",
+        digitalPlan: plan,
+        paymentMode: paymentMode,
+      });
+    }
+
+    // 6. Send clean notification to the member
+    sendNotification({
+      userId,
+      title: "Digital Access Unlocked",
+      message: `You now have access to "${book.title}" (${plan.toUpperCase()} pass). Active in your Digital Shelf and My Issues.`,
+      type: "success",
+      link: "/purchaser/books",
+    });
+
     res.json({
       success: true,
       message: `Successfully unlocked "${book.title}" for ${plan.toUpperCase()} access!`,
@@ -333,7 +364,7 @@ export const purchaseOrRentDigitalBook = async (req, res) => {
     });
   } catch (error) {
     console.error("[Digital Access Error]:", error);
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ message: error.message || "Failed to process digital access" });
   }
 };
 
