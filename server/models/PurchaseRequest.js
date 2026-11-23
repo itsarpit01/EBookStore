@@ -16,6 +16,28 @@ const purchaseRequestSchema = new mongoose.Schema(
     neededUntil: { type: Date },
     proposedDate: { type: Date },
     reason: { type: String, required: true, trim: true },
+
+    // ── NEW: Digital request tracking ──
+    accessMode: {
+      type: String,
+      enum: ["physical", "digital"],
+      default: "physical",
+    },
+    digitalPlan: {
+      type: String,
+      enum: ["day", "week", "year", "lifetime"],
+      default: null,
+    },
+    paymentMode: {
+      type: String,
+      enum: ["credits", "cash"],
+      default: null,
+    },
+    creditCost: {
+      type: Number,
+      default: 0,
+    },
+
     status: {
       type: String,
       enum: ["pending", "counter_offered", "approved", "rejected"],
@@ -25,7 +47,7 @@ const purchaseRequestSchema = new mongoose.Schema(
     reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     reviewedAt: { type: Date },
     reviewNote: { type: String, trim: true },
-    issue: { type: mongoose.Schema.Types.ObjectId, ref: "Issue" }, // ← NEW: linked issue
+    issue: { type: mongoose.Schema.Types.ObjectId, ref: "Issue" },
   },
   { timestamps: true }
 );

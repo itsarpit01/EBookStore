@@ -16,6 +16,23 @@ const issueSchema = new mongoose.Schema(
     reissueCount: { type: Number, default: 0, min: 0 },
     reissueRequested: { type: Boolean, default: false },
     reissueRequestedDate: { type: Date },
+
+    // ── NEW: Physical vs Digital Tracking ──
+    accessMode: {
+      type: String,
+      enum: ["physical", "digital"],
+      default: "physical",
+    },
+    digitalPlan: {
+      type: String,
+      enum: ["day", "week", "year", "lifetime"],
+      default: null,
+    },
+    paymentMode: {
+      type: String,
+      enum: ["credits", "cash"],
+      default: null,
+    },
   },
   { timestamps: true }
 );

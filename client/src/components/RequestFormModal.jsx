@@ -26,16 +26,16 @@ export default function RequestFormModal({ initial = {}, request, onClose, onSav
   const [myActiveIssues, setMyActiveIssues] = useState([]);
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
 
-  // ── Step 1 Choice: null / "physical" / "digital" ──
-  const [accessMode, setAccessMode] = useState("physical"); // Default physical ya null
-  const [paymentMode, setPaymentMode] = useState("credits"); // "credits" ya "cash"
-  const [digitalPlan, setDigitalPlan] = useState("week"); // "day", "week", "year", "lifetime"
-  const [userCredits, setUserCredits] = useState(100);
+  // Mode: "physical" or "digital"
+  const [accessMode, setAccessMode] = useState("physical");
+  const [paymentMode, setPaymentMode] = useState("credits");
+  const [digitalPlan, setDigitalPlan] = useState("week");
+  const [userCredits, setUserCredits] = useState(user?.credits ?? 100);
 
   const [form, setForm] = useState({
     bookId: request?.book || initial.bookId || "",
     quantity: request?.quantity ?? 1,
-    neededUntil: request?.neededUntil ? toDateInput(request.neededUntil) : dateInput(1),
+    neededUntil: request?.neededUntil ? toDateInput(request.neededUntil) : dateInput(tier.maxIssueDays || 14),
     reason: request?.reason || "",
   });
   const [errors, setErrors] = useState({});
@@ -51,7 +51,7 @@ export default function RequestFormModal({ initial = {}, request, onClose, onSav
           const [reqRes, issueRes, shelfRes] = await Promise.all([
             api.get("/purchase-requests/my"),
             api.get("/issues/my").catch(() => ({ data: [] })),
-            api.get("/books/my-digital-shelf").catch(() => ({ data: { credits: 100 } })),
+            api.get("/books/my-digital-shelf").catch(() => ({ data: { credits: user?.credits ?? 100 } })),
           ]);
           if (!cancelled) {
             setMyRequests(reqRes.data);
@@ -71,8 +71,8 @@ export default function RequestFormModal({ initial = {}, request, onClose, onSav
         } else {
           const res = await api.get("/books", { params: { limit: 50, sort: "title" } });
           if (cancelled) return;
-          const list = res.data.data;
-          setBooks(list);
+          const list = res.data.data || res.data.books || res.data;
+          setBooks(Array.isArray(list) ? list : []);
           if (request && !request.book && request.isbn) {
             const match = list.find((b) => b.isbn === request.isbn);
             if (match) setForm((f) => ({ ...f, bookId: match._id }));
@@ -89,17 +89,17 @@ export default function RequestFormModal({ initial = {}, request, onClose, onSav
     return () => {
       cancelled = true;
     };
-  }, [request, isLocked, lockedId, isEdit]);
+  }, [request, isLocked, lockedId, isEdit, user]);
 
   const selected = books.find((b) => b._id === form.bookId);
 
   // Digital Pricing Map
   const lifetimeCredits = selected?.creditPrice || Math.max(1, Math.round((selected?.price || 100) / 10));
   const digitalPlans = [
-    { id: "day", title: "1 Day Pass", inr: selected?.rentalPlans?.day?.inr ?? 20, credits: selected?.rentalPlans?.day?.credits ?? 2, desc: "24 Hours Access" },
-    { id: "week", title: "1 Week Pass", inr: selected?.rentalPlans?.week?.inr ?? 70, credits: selected?.rentalPlans?.week?.credits ?? 7, desc: "7 Days Access" },
-    { id: "year", title: "1 Year Pass", inr: selected?.rentalPlans?.year?.inr ?? 299, credits: selected?.rentalPlans?.year?.credits ?? 30, desc: "365 Days Access" },
-    { id: "lifetime", title: "Lifetime Buy", inr: selected?.price || 499, credits: lifetimeCredits, desc: "Permanent Ownership" },
+    { id: "day", title: "1 Day Pass", inr: selected?.rentalPlans?.day?.inr ?? 20, credits: selected?.rentalPlans?.day?.credits ?? 2, desc: "24 Hours Access", days: 1 },
+    { id: "week", title: "1 Week Pass", inr: selected?.rentalPlans?.week?.inr ?? 70, credits: selected?.rentalPlans?.week?.credits ?? 7, desc: "7 Days Access", days: 7 },
+    { id: "year", title: "1 Year Pass", inr: selected?.rentalPlans?.year?.inr ?? 299, credits: selected?.rentalPlans?.year?.credits ?? 30, desc: "365 Days Access", days: 365 },
+    { id: "lifetime", title: "Lifetime Buy", inr: selected?.price || 499, credits: lifetimeCredits, desc: "Permanent Ownership", days: 3650 },
   ];
   const currentPlan = digitalPlans.find((p) => p.id === digitalPlan) || digitalPlans[1];
   const hasEnoughCredits = userCredits >= currentPlan.credits;
@@ -142,12 +142,13 @@ export default function RequestFormModal({ initial = {}, request, onClose, onSav
     e.preventDefault();
     setFormError("");
 
-    // ── SUBMIT DIGITAL ACCESS ──
+    if (!form.bookId) {
+      setErrors({ bookId: "Please select a book" });
+      return;
+    }
+
+    // ── DIGITAL ACCESS REQUEST ──
     if (accessMode === "digital") {
-      if (!form.bookId) {
-        setErrors({ bookId: "Please select a book" });
-        return;
-      }
       if (paymentMode === "credits" && !hasEnoughCredits) {
         toast.error(`Insufficient credits! You need ${currentPlan.credits} credits.`);
         return;
@@ -155,11 +156,33 @@ export default function RequestFormModal({ initial = {}, request, onClose, onSav
 
       setSaving(true);
       try {
-        const res = await api.post(`/books/${form.bookId}/digital-access`, {
-          plan: digitalPlan,
+        const d = new Date();
+        d.setDate(d.getDate() + currentPlan.days);
+        const neededUntilDate = toDateInput(d);
+
+        const effectiveReason = form.reason?.trim()
+          ? form.reason.trim()
+          : `Digital ${currentPlan.title} Access`;
+
+        await api.post("/purchase-requests", {
+          bookId: form.bookId,
+          quantity: 1,
+          neededUntil: neededUntilDate,
+          reason: effectiveReason,
+          accessMode: "digital",
+          digitalPlan,
           paymentMode,
+          creditCost: paymentMode === "credits" ? currentPlan.credits : 0,
         });
-        toast.success(res.data.message || `Unlocked "${selected?.title || "Book"}" digitally!`);
+
+        // 100% WORDS ONLY - ZERO EMOJIS OR ICONS
+        toast.success(
+          paymentMode === "credits"
+            ? `Digital access requested (${currentPlan.credits} Credits). Waiting for librarian approval.`
+            : "Digital access request submitted. Waiting for librarian approval."
+        );
+
+        window.dispatchEvent(new Event("quota-updated"));
         onSaved();
       } catch (err) {
         setFormError(getErrorMessage(err));
@@ -169,11 +192,10 @@ export default function RequestFormModal({ initial = {}, request, onClose, onSav
       return;
     }
 
-    // ── SUBMIT PHYSICAL BORROW REQUEST ──
+    // ── PHYSICAL BORROW REQUEST ──
     if (existingActiveRequest || isLimitReached) return;
 
-    // Reason optional safe fallback
-    const effectiveReason = form.reason?.trim() ? form.reason.trim() : "Borrow for study & reading";
+    const effectiveReason = form.reason?.trim() ? form.reason.trim() : "Borrow for study and reading";
 
     const formToValidate = {
       ...form,
@@ -198,6 +220,7 @@ export default function RequestFormModal({ initial = {}, request, onClose, onSav
           quantity: Number(form.quantity),
           neededUntil: form.neededUntil,
           reason: effectiveReason,
+          accessMode: "physical",
         });
         toast.success("Physical request updated");
       } else {
@@ -206,6 +229,7 @@ export default function RequestFormModal({ initial = {}, request, onClose, onSav
           quantity: Number(form.quantity),
           neededUntil: form.neededUntil,
           reason: effectiveReason,
+          accessMode: "physical",
         });
         toast.success("Physical request submitted");
       }
@@ -252,9 +276,7 @@ export default function RequestFormModal({ initial = {}, request, onClose, onSav
             {errors.bookId && <span className="error-text">{errors.bookId}</span>}
           </div>
 
-          {/* ═════════════════════════════════════════════════════════════ */}
-          {/* STEP 1: CHOOSE ACCESS MODE (Sabse Pehle Yeh Select Hoga)     */}
-          {/* ═════════════════════════════════════════════════════════════ */}
+          {/* STEP 1: CHOOSE ACCESS MODE (Only Clean Inline SVGs) */}
           <div className="field" style={{ margin: "14px 0" }}>
             <label style={{ fontWeight: 800, fontSize: "0.92rem", color: "#0f172a", marginBottom: 8, display: "block" }}>
               How do you want to take this book?
@@ -303,15 +325,13 @@ export default function RequestFormModal({ initial = {}, request, onClose, onSav
                   Digital Rent / Buy
                 </div>
                 <div style={{ fontSize: "0.74rem", color: "#64748b", marginTop: 4 }}>
-                  Instant online reading (Day/Week/Year/Lifetime)
+                  Online reading via Credits or Money
                 </div>
               </div>
             </div>
           </div>
 
-          {/* ═════════════════════════════════════════════════════════════ */}
-          {/* STEP 2A: AGAR DIGITAL CHUNA TOH PAYMENT & DURATION DETAILS   */}
-          {/* ═════════════════════════════════════════════════════════════ */}
+          {/* STEP 2A: DIGITAL DURATION & PAYMENT */}
           {accessMode === "digital" && (
             <div
               style={{
@@ -322,9 +342,8 @@ export default function RequestFormModal({ initial = {}, request, onClose, onSav
                 marginBottom: 16,
               }}
             >
-              {/* Payment Mode Selector First */}
               <label style={{ fontSize: "0.82rem", fontWeight: 700, color: "#334155", marginBottom: 6, display: "block" }}>
-                How do you want to pay?
+                Payment Method:
               </label>
               <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
                 <button
@@ -346,11 +365,10 @@ export default function RequestFormModal({ initial = {}, request, onClose, onSav
                   }}
                   onClick={() => setPaymentMode("credits")}
                 >
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
-                    <circle cx="12" cy="12" r="10" fill="currentColor" />
-                    <circle cx="12" cy="12" r="7" stroke="#ffffff" strokeWidth="1.5" fill="none" />
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <circle cx="12" cy="12" r="10" />
                   </svg>
-                  Pay via Credits ({userCredits} left)
+                  Pay with Credits ({userCredits} available)
                 </button>
 
                 <button
@@ -372,7 +390,7 @@ export default function RequestFormModal({ initial = {}, request, onClose, onSav
                   }}
                   onClick={() => setPaymentMode("cash")}
                 >
-                  ₹ Pay via Money / Cash
+                  Pay with Money (Cash)
                 </button>
               </div>
 
@@ -398,18 +416,20 @@ export default function RequestFormModal({ initial = {}, request, onClose, onSav
                       <div style={{ fontWeight: 700, fontSize: "0.84rem", color: "#1e293b" }}>{p.title}</div>
                       <div style={{ fontSize: "0.72rem", color: "#64748b" }}>{p.desc}</div>
                       <div style={{ fontSize: "0.85rem", fontWeight: 800, color: "#047857", marginTop: 4 }}>
-                        {paymentMode === "credits" ? `${p.credits} Credits` : `₹${p.inr}`}
+                        {paymentMode === "credits" ? `${p.credits} Credits` : `Rs. ${p.inr}`}
                       </div>
                     </div>
                   );
                 })}
               </div>
+
+              <div style={{ fontSize: "0.75rem", color: "#64748b", marginTop: 10 }}>
+                Request will be sent to the librarian. Upon approval, credits will be deducted and book will be active under My Issues.
+              </div>
             </div>
           )}
 
-          {/* ═════════════════════════════════════════════════════════════ */}
-          {/* STEP 2B: AGAR PHYSICAL CHUNA TOH QUANTITY & NEEDED UNTIL     */}
-          {/* ═════════════════════════════════════════════════════════════ */}
+          {/* STEP 2B: PHYSICAL QUANTITY & NEEDED UNTIL */}
           {accessMode === "physical" && (
             <>
               {/* Quantity */}
@@ -497,7 +517,7 @@ export default function RequestFormModal({ initial = {}, request, onClose, onSav
             </>
           )}
 
-          {/* Reason Field (Always Optional) */}
+          {/* Reason Field */}
           <div className="field">
             <label htmlFor="reason">Reason (Optional)</label>
             <textarea
@@ -533,8 +553,8 @@ export default function RequestFormModal({ initial = {}, request, onClose, onSav
                 ? "Processing..."
                 : accessMode === "digital"
                 ? paymentMode === "credits"
-                  ? `Unlock Online (${currentPlan.credits} Credits)`
-                  : `Pay ₹${currentPlan.inr} & Unlock`
+                  ? `Request Access (${currentPlan.credits} Credits)`
+                  : `Request Access (Rs. ${currentPlan.inr})`
                 : isEdit
                 ? "Update Request"
                 : "Submit Physical Request"}

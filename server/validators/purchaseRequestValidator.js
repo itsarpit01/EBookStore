@@ -11,7 +11,7 @@ const quantitySchema = z
   .min(1, "At least 1");
 
 // ── Truly Optional Reason Schema ──
-// Agar khali (blank) ho toh accept karega, aur agar user kuch likhe toh valid 5-500 characters hona chahiye
+// Khali (blank) ho toh accept karega, aur agar likha ho toh 5-500 characters hona chahiye
 const reasonSchema = z
   .string()
   .trim()
@@ -29,19 +29,25 @@ const reasonSchema = z
 const requestFields = {
   bookId: bookIdSchema,
   quantity: quantitySchema,
-  neededUntil: dueDateSchema, // required, "YYYY-MM-DD"
+  neededUntil: dueDateSchema,
   reason: reasonSchema,
+
+  // ── Digital Access Fields (Zod inko ab strip nahi karega) ──
+  accessMode: z.enum(["physical", "digital"]).optional(),
+  digitalPlan: z.enum(["day", "week", "year", "lifetime"]).optional(),
+  paymentMode: z.enum(["credits", "cash"]).optional(),
+  creditCost: z.coerce.number().optional(),
 };
 
-export const createRequestSchema = z.object(requestFields);
-export const updateRequestSchema = z.object(requestFields);
+export const createRequestSchema = z.object(requestFields).passthrough();
+export const updateRequestSchema = z.object(requestFields).passthrough();
 
 export const reviewRequestSchema = z
   .object({
     status: z.enum(["approved", "rejected", "counter_offered"], {
       error: "Status must be approved, rejected, or counter_offered",
     }),
-    proposedDate: z.coerce.date().optional(), // range controller mein plan ke saath check hoti hai
+    proposedDate: z.coerce.date().optional(),
     reviewNote: z.string().trim().max(300, "Max 300 characters").optional(),
   })
   .refine((d) => d.status !== "counter_offered" || d.proposedDate, {
