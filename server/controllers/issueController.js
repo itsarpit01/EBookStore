@@ -8,7 +8,14 @@ import { createIssue, reissueIssue, populateIssue } from "../services/issueServi
 import { MAX_REISSUES } from "../utils/dates.js";
 import { sendNotification, notifyLibrarians } from "./notificationController.js";
 
-const formatDateStr = (date) => (date ? new Date(date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "");
+const formatDateStr = (date) =>
+  date
+    ? new Date(date).toLocaleDateString("en-IN", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+      })
+    : "";
 
 // ══════════════════════════════════════════════════════════════════════════
 // POST /api/issues (Librarian clicks "Confirm & Issue book")
@@ -47,11 +54,10 @@ export const issueBook = async (req, res) => {
     // Digital copies physical library copies ko decrement nahi karti
     await Book.findByIdAndUpdate(bookId, { $inc: { availableCopies: 1 } });
 
-    // ⭐ DEDUCT CREDITS & ACTIVATE DIGITAL SHELF UPON ISSUE CONFIRMATION ⭐
+    // DEDUCT CREDITS & ACTIVATE DIGITAL SHELF UPON ISSUE CONFIRMATION
     if (paymentMode === "credits" && !requestDoc?.creditsDeducted) {
       const userDoc = await User.findById(memberId);
       if (userDoc) {
-        // Naye rates: 1 Day = 10, 1 Week = 50, 1 Year = 70, Lifetime = 150
         let cost = requestDoc?.creditCost || 0;
         if (!cost || cost <= 0) {
           const plan = digitalPlan || "week";
@@ -104,12 +110,12 @@ export const issueBook = async (req, res) => {
 
   const populated = await populateIssue(Issue.findById(issue._id));
 
-  // Notification: Clean plain text only (no emojis/icons)
+  // Notification
   sendNotification({
     userId: memberId,
     title: isDigital ? "Digital Book Issued" : "Book Issued",
     message: isDigital
-      ? `"${populated.book?.title || 'Book'}" digital access is confirmed. Book is now active under My Issues.`
+      ? `"${populated.book?.title || 'Book'}" digital access is confirmed. Book is now active under My Library.`
       : `"${populated.book?.title || 'Book'}" has been issued to you. Due date: ${formatDateStr(dueDate)}.`,
     type: "success",
     link: "/purchaser/my-issues",
@@ -125,7 +131,7 @@ export const requestReissue = async (req, res) => {
 
   if (!issue) return res.status(404).json({ message: "Issue record not found" });
   if (issue.status !== "issued") {
-    return res.status(400).json({ message: "Only currently issued books can be reissued" });
+    return res.status(400).json({ message: "Only currently active rentals can be reissued" });
   }
   if ((issue.reissueCount || 0) >= MAX_REISSUES) {
     return res.status(400).json({ message: `Maximum reissue limit (${MAX_REISSUES}) reached` });
@@ -139,8 +145,8 @@ export const requestReissue = async (req, res) => {
   const memberName = populated.member?.name || "A member";
 
   notifyLibrarians({
-    title: "New Reissue Request",
-    message: `${memberName} requested reissue for "${populated.book?.title || 'Book'}" until ${formatDateStr(dueDate)}.`,
+    title: "New Extension Request",
+    message: `${memberName} requested rental extension for "${populated.book?.title || 'Book'}" until ${formatDateStr(dueDate)}.`,
     type: "warning",
     link: "/librarian/requests",
   });
@@ -154,7 +160,7 @@ export const cancelReissue = async (req, res) => {
 
   if (!issue) return res.status(404).json({ message: "Issue record not found" });
   if (!issue.reissueRequested) {
-    return res.status(400).json({ message: "No pending reissue request found for this book" });
+    return res.status(400).json({ message: "No pending extension request found for this book" });
   }
 
   issue.reissueRequested = false;
@@ -162,7 +168,7 @@ export const cancelReissue = async (req, res) => {
   await issue.save();
 
   await Notification.deleteMany({
-    title: "New Reissue Request",
+    title: "New Extension Request",
     link: "/librarian/requests",
   });
 
@@ -173,7 +179,7 @@ export const cancelReissue = async (req, res) => {
 // PATCH /api/issues/:id/reissue (librarian) body: { dueDate }
 export const reissue = async (req, res) => {
   const issue = await reissueIssue({ issueId: req.params.id, dueDate: req.body.dueDate });
-  
+
   await Issue.findByIdAndUpdate(req.params.id, {
     reissueRequested: false,
     reissueRequestedDate: null,
@@ -183,14 +189,14 @@ export const reissue = async (req, res) => {
 
   sendNotification({
     userId: populated.member?._id || populated.member,
-    title: "Reissue Approved",
-    message: `Your reissue request for "${populated.book?.title || 'Book'}" was approved. Extended until: ${formatDateStr(req.body.dueDate)}.`,
+    title: "Extension Approved",
+    message: `Your rental extension for "${populated.book?.title || 'Book'}" was approved. Extended until: ${formatDateStr(req.body.dueDate)}.`,
     type: "success",
     link: "/purchaser/my-issues",
   });
 
   await Notification.deleteMany({
-    title: "New Reissue Request",
+    title: "New Extension Request",
     link: "/librarian/requests",
   });
 
@@ -202,7 +208,7 @@ export const rejectReissue = async (req, res) => {
   const issue = await Issue.findById(req.params.id);
   if (!issue) return res.status(404).json({ message: "Issue record not found" });
   if (!issue.reissueRequested) {
-    return res.status(400).json({ message: "No pending reissue request to reject" });
+    return res.status(400).json({ message: "No pending extension request to reject" });
   }
 
   issue.reissueRequested = false;
@@ -213,14 +219,14 @@ export const rejectReissue = async (req, res) => {
 
   sendNotification({
     userId: populated.member?._id || populated.member,
-    title: "Reissue Rejected",
-    message: `Your reissue request for "${populated.book?.title || 'Book'}" was rejected. Please return the book on time.`,
+    title: "Extension Rejected",
+    message: `Your extension request for "${populated.book?.title || 'Book'}" was rejected.`,
     type: "danger",
     link: "/purchaser/my-issues",
   });
 
   await Notification.deleteMany({
-    title: "New Reissue Request",
+    title: "New Extension Request",
     link: "/librarian/requests",
   });
 
@@ -236,7 +242,12 @@ export const returnBook = async (req, res) => {
   const issue = await Issue.findOne(query);
   if (!issue) return res.status(404).json({ message: "Issue record not found" });
   if (issue.status === "returned") {
-    return res.status(400).json({ message: "Book already returned" });
+    return res.status(400).json({ message: "Rental already returned / closed" });
+  }
+
+  // Lifetime purchases cannot be returned
+  if (issue.digitalPlan === "lifetime") {
+    return res.status(400).json({ message: "Lifetime purchases cannot be returned." });
   }
 
   const now = new Date();
@@ -253,8 +264,23 @@ export const returnBook = async (req, res) => {
     },
     { new: true }
   );
-  if (!updated) return res.status(400).json({ message: "Book already returned" });
+  if (!updated) return res.status(400).json({ message: "Rental already returned / closed" });
 
+  // 1. Digital lease early return: Expire digital shelf entry immediately to release rental quota
+  if (issue.accessMode === "digital") {
+    await User.updateOne(
+      { _id: issue.member, "digitalShelf.book": issue.book },
+      { $set: { "digitalShelf.$.expiresAt": now } }
+    );
+  }
+
+  // 2. Synchronize PurchaseRequest / Order record status to "returned"
+  await PurchaseRequest.updateMany(
+    { issue: issue._id },
+    { $set: { status: "returned" } }
+  ).catch(() => {});
+
+  // Physical library copy increment
   if (issue.accessMode !== "digital") {
     await Book.findByIdAndUpdate(issue.book, { $inc: { availableCopies: 1 } });
   }
@@ -270,7 +296,10 @@ export const returnBook = async (req, res) => {
 
   // On-time return reward (+10 bonus credits) for physical returns
   let rewardGranted = false;
-  const isOnTime = issue.accessMode !== "digital" && fineAmount === 0 && now.getTime() <= new Date(issue.dueDate).getTime();
+  const isOnTime =
+    issue.accessMode !== "digital" &&
+    fineAmount === 0 &&
+    now.getTime() <= new Date(issue.dueDate).getTime();
 
   if (isOnTime) {
     try {

@@ -17,7 +17,7 @@ const purchaseRequestSchema = new mongoose.Schema(
     proposedDate: { type: Date },
     reason: { type: String, required: true, trim: true },
 
-    // ── NEW: Digital request tracking ──
+    // ── Digital request tracking ──
     accessMode: {
       type: String,
       enum: ["physical", "digital"],
@@ -40,7 +40,7 @@ const purchaseRequestSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ["pending", "counter_offered", "approved", "rejected"],
+      enum: ["pending", "counter_offered", "approved", "rejected", "returned"],
       default: "pending",
       index: true,
     },

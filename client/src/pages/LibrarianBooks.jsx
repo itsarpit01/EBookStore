@@ -72,7 +72,7 @@ export default function LibrarianBooks() {
     setDeleting(true);
     try {
       await api.delete(`/books/${toDelete._id}`);
-      toast.success("Book deleted");
+      toast.success("Book removed from inventory");
       setToDelete(null);
       if (books.length === 1 && page > 1) setPage(page - 1);
       else loadBooks();
@@ -105,7 +105,7 @@ export default function LibrarianBooks() {
         reason: discontinueReason,
       });
 
-      toast.success(res.data.message || "Book discontinued successfully");
+      toast.success(res.data.message || "Book discontinued from store");
       setToDiscontinue(null);
       loadBooks();
     } catch (err) {
@@ -115,10 +115,6 @@ export default function LibrarianBooks() {
     }
   };
 
-  // ── Smart Filter Layer ──
-  // 1. All: Saari books dikhegi
-  // 2. Available: Discontinue wali NAHI dikhegi (sirf active copies > 0)
-  // 3. Not available: 0 copies wali AUR Discontinued wali books dikhegi
   const displayedBooks = books.filter((b) => {
     if (available === "true") {
       return !b.isDiscontinued && b.availableCopies > 0;
@@ -133,11 +129,11 @@ export default function LibrarianBooks() {
     <>
       <div className="page-head">
         <div>
-          <h2>Books</h2>
-          <p>{pagination.total} book(s) in your library.</p>
+          <h2>Inventory Catalog</h2>
+          <p>{pagination.total} book title(s) in your store inventory.</p>
         </div>
         <button className="btn" onClick={() => setFormBook(null)}>
-          <PlusIcon size={18} /> Add book
+          <PlusIcon size={18} /> Add to Inventory
         </button>
       </div>
 
@@ -145,7 +141,7 @@ export default function LibrarianBooks() {
         <div className="search-box">
           <SearchIcon size={18} />
           <input
-            placeholder="Search title, author or ISBN"
+            placeholder="Search inventory by title, author or ISBN..."
             value={search}
             onChange={(e) => {
               setSearch(e.target.value);
@@ -161,9 +157,9 @@ export default function LibrarianBooks() {
             setPage(1);
           }}
         >
-          <option value="">All books</option>
-          <option value="true">Available</option>
-          <option value="false">Not available</option>
+          <option value="">All Inventory</option>
+          <option value="true">In Stock / Active</option>
+          <option value="false">Out of Stock / Retired</option>
         </select>
         <select
           className="toolbar-input"
@@ -173,20 +169,20 @@ export default function LibrarianBooks() {
             setPage(1);
           }}
         >
-          <option value="-createdAt">Newest first</option>
-          <option value="createdAt">Oldest first</option>
+          <option value="-createdAt">Newest Additions</option>
+          <option value="createdAt">Oldest First</option>
           <option value="title">Title A-Z</option>
           <option value="-title">Title Z-A</option>
           <option value="author">Author A-Z</option>
-          <option value="price">Price low to high</option>
-          <option value="-price">Price high to low</option>
+          <option value="price">Price: Low to High</option>
+          <option value="-price">Price: High to Low</option>
         </select>
       </div>
 
       {firstLoad && loading ? (
-        <p className="empty">Loading books...</p>
+        <p className="empty">Loading inventory catalog...</p>
       ) : displayedBooks.length === 0 ? (
-        <p className="empty">No books found.</p>
+        <p className="empty">No books found in inventory.</p>
       ) : (
         <div
           className="book-grid"
@@ -217,7 +213,7 @@ export default function LibrarianBooks() {
                         whiteSpace: "nowrap",
                       }}
                       onClick={() => handleOpenDiscontinueModal(b)}
-                      title="Discontinue this book and notify current borrowers"
+                      title="Discontinue this book and notify current readers"
                     >
                       Discontinue
                     </button>
@@ -249,7 +245,7 @@ export default function LibrarianBooks() {
         </div>
       )}
 
-      {/* Direct First & Last Jump Pagination */}
+      {/* Direct Jump Pagination */}
       {pagination.totalPages > 1 && (
         <div
           className="pagination"
@@ -315,7 +311,7 @@ export default function LibrarianBooks() {
         />
       )}
 
-      {/* ── Discontinue Book Modal ── */}
+      {/* Discontinue Book Modal */}
       {toDiscontinue && (
         <Modal
           title={`Discontinue "${toDiscontinue.title}"`}
@@ -333,7 +329,7 @@ export default function LibrarianBooks() {
                 lineHeight: 1.45,
               }}
             >
-              <strong>Notice:</strong> Marking this book as discontinued will prevent any new issues. Active borrowers will be given a <strong>7-day grace period</strong> from today to return their copy, and notification emails will be sent strictly to them.
+              <strong>Notice:</strong> Marking this book as discontinued will prevent any new purchases or rentals. Active readers will be given a <strong>7-day grace period</strong> from today to finish reading, and notification emails will be sent strictly to them.
             </div>
 
             <div className="field">
@@ -355,7 +351,7 @@ export default function LibrarianBooks() {
               </label>
               <textarea
                 id="discontinueReason"
-                placeholder="e.g. Outdated edition, inventory damaged, syllabus revised..."
+                placeholder="e.g. Outdated edition, rights expired, digital license revised..."
                 rows={3}
                 value={discontinueReason}
                 onChange={(e) => setDiscontinueReason(e.target.value)}
@@ -387,16 +383,16 @@ export default function LibrarianBooks() {
 
       {/* Delete Confirmation Modal */}
       {toDelete && (
-        <Modal title="Delete book" onClose={() => setToDelete(null)}>
+        <Modal title="Delete from Inventory" onClose={() => setToDelete(null)}>
           <p>
-            Delete <strong>{toDelete.title}</strong>? This cannot be undone.
+            Remove <strong>{toDelete.title}</strong> from inventory permanently? This cannot be undone.
           </p>
           <div className="modal-actions">
             <button className="btn btn-soft" onClick={() => setToDelete(null)}>
               Cancel
             </button>
             <button className="btn btn-danger" onClick={confirmDelete} disabled={deleting}>
-              {deleting ? "Deleting..." : "Delete"}
+              {deleting ? "Deleting..." : "Delete Book"}
             </button>
           </div>
         </Modal>

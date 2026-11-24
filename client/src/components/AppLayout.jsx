@@ -1,45 +1,74 @@
-import { useEffect, useState, useCallback, useRef } from "react";
-import { Link, NavLink, Outlet, useNavigate, useLocation } from "react-router-dom";
+import { useEffect, useState, useRef, useCallback } from "react";
+import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import api from "../api/axios";
-import NotificationBell from "./NotificationBell";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import ConfirmModal from "./ConfirmModal";
 import MembershipModal from "./MembershipModal";
 import ThemeToggle from "./ThemeToggle";
 import { getEffectiveTier } from "../utils/membershipConfig";
-import {
-  BookIcon,
-  DashboardIcon,
-  IssueIcon,
-  RequestIcon,
-  LogoutIcon,
-  MenuIcon,
-  UserIcon,
-  SupportIcon,
-} from "./Icons";
+import { BookIcon, DashboardIcon, IssueIcon, RequestIcon, LogoutIcon, MenuIcon } from "./Icons";
 
-const SERVER_URL =
-  import.meta.env.VITE_SERVER_URL ||
-  (import.meta.env.VITE_API_URL
-    ? import.meta.env.VITE_API_URL.replace(/\/api\/?$/, "")
-    : "http://localhost:5000");
+const SERVER_URL = "http://localhost:5001";
 
-const NAV = {
+function WishlistNavIcon({ size = 18 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+    </svg>
+  );
+}
+
+function UsersNavIcon({ size = 18 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+    </svg>
+  );
+}
+
+const NAV_SECTIONS = {
   librarian: [
-    { to: "/librarian", label: "Dashboard", icon: DashboardIcon, end: true },
-    { to: "/librarian/books", label: "Books", icon: BookIcon },
-    { to: "/librarian/issues", label: "Issue / Return", icon: IssueIcon },
-    { to: "/librarian/requests", label: "Requests", icon: RequestIcon },
-    { to: "/librarian/users", label: "Members", icon: UserIcon || DashboardIcon },
-    { to: "/librarian/support", label: "Support Tickets", icon: SupportIcon },
+    {
+      title: "Store Overview",
+      items: [
+        { to: "/librarian", label: "Dashboard", icon: DashboardIcon, end: true },
+      ],
+    },
+    {
+      title: "Catalog & Sales",
+      items: [
+        { to: "/librarian/books", label: "Inventory Catalog", icon: BookIcon },
+        { to: "/librarian/requests", label: "Orders & Payments", icon: RequestIcon },
+        { to: "/librarian/issues", label: "Active Readers", icon: IssueIcon },
+      ],
+    },
+    {
+      title: "Administration",
+      items: [
+        { to: "/librarian/users", label: "Reader Accounts", icon: UsersNavIcon },
+      ],
+    },
   ],
   purchaser: [
-    { to: "/purchaser", label: "Dashboard", icon: DashboardIcon, end: true },
-    { to: "/purchaser/books", label: "Browse Books", icon: BookIcon },
-    { to: "/purchaser/my-issues", label: "My Issues", icon: IssueIcon },
-    { to: "/purchaser/requests", label: "My Requests", icon: RequestIcon },
-    { to: "/purchaser/support", label: "Help & Support", icon: SupportIcon },
+    {
+      title: "Store",
+      items: [
+        { to: "/purchaser/books", label: "Explore Store", icon: BookIcon },
+        { to: "/purchaser", label: "My Reading Hub", icon: DashboardIcon, end: true },
+      ],
+    },
+    {
+      title: "My Shelf",
+      items: [
+        { to: "/purchaser/my-issues", label: "My Library", icon: IssueIcon },
+        { to: "/purchaser/wishlist", label: "Wishlist", icon: WishlistNavIcon },
+        { to: "/purchaser/requests", label: "Orders & Receipts", icon: RequestIcon },
+      ],
+    },
   ],
 };
 
@@ -47,283 +76,284 @@ export default function AppLayout() {
   const { user, logout } = useAuth();
   const toast = useToast();
   const navigate = useNavigate();
-  const location = useLocation();
 
   const [open, setOpen] = useState(false);
+  const [dropdownOpen, setDropdownOpen] = useState(false);
   const [confirmLogout, setConfirmLogout] = useState(false);
   const [avatarBroken, setAvatarBroken] = useState(false);
   const [showMembershipModal, setShowMembershipModal] = useState(false);
+  const [activeRentalsCount, setActiveRentalsCount] = useState(0);
 
-  // Live Credits State for Purchaser
-  const [userCredits, setUserCredits] = useState(user?.credits ?? 100);
+  const dropdownRef = useRef(null);
 
-  // Profile Dropdown state & ref
-  const [dropdownOpen, setDropdownOpen] = useState(false);
-  const menuRef = useRef(null);
-
-  // Active slots in sidebar
-  const [sidebarCapacity, setSidebarCapacity] = useState({ active: 0, pending: 0 });
-
-  const links = NAV[user?.role] || [];
-
-  // Google External Avatar vs Local Uploaded Avatar
-  const avatarSrc = user?.avatar
-    ? user.avatar.startsWith("http")
-      ? user.avatar
-      : `${SERVER_URL}${user.avatar.startsWith("/") ? "" : "/"}${user.avatar}`
-    : null;
-
+  const sections = NAV_SECTIONS[user?.role] || [];
+  const avatarSrc = user?.avatar ? `${SERVER_URL}${user.avatar}` : null;
   const tier = getEffectiveTier(user);
+
+  // Live capacity & active rentals load
+  const fetchUserQuota = useCallback(async () => {
+    if (user?.role !== "purchaser") return;
+    try {
+      const res = await api.get("/issues/my");
+      const issues = Array.isArray(res.data) ? res.data : [];
+      const active = issues.filter((i) => i.status === "issued").length;
+      setActiveRentalsCount(active);
+    } catch {
+      // ignore
+    }
+  }, [user?.role]);
+
+  useEffect(() => {
+    fetchUserQuota();
+
+    const handleQuotaUpdate = () => {
+      fetchUserQuota();
+    };
+
+    window.addEventListener("quota-updated", handleQuotaUpdate);
+    return () => {
+      window.removeEventListener("quota-updated", handleQuotaUpdate);
+    };
+  }, [fetchUserQuota]);
 
   useEffect(() => {
     setAvatarBroken(false);
   }, [user?.avatar]);
 
-  // Click outside listener for dropdown
+  // Click outside to close dropdown
   useEffect(() => {
     const handleClickOutside = (e) => {
-      if (menuRef.current && !menuRef.current.contains(e.target)) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
         setDropdownOpen(false);
       }
     };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
-
-  // Load quota & live credits for purchaser
-  const loadSidebarQuota = useCallback(async () => {
-    if (user?.role !== "purchaser") return;
-    try {
-      const [reqRes, issueRes, shelfRes] = await Promise.all([
-        api.get("/purchase-requests/my").catch(() => ({ data: [] })),
-        api.get("/issues/my").catch(() => ({ data: [] })),
-        api.get("/books/my-digital-shelf").catch(() => ({ data: { credits: 100 } })),
-      ]);
-      const reqs = Array.isArray(reqRes.data) ? reqRes.data : [];
-      const pending = reqs.filter((r) => ["pending", "counter_offered"].includes(r.status)).length;
-      const issues = Array.isArray(issueRes.data) ? issueRes.data : [];
-      const active = issues.filter((i) => i.status === "issued").length;
-      setSidebarCapacity({ active, pending });
-
-      if (shelfRes.data?.credits !== undefined) {
-        setUserCredits(shelfRes.data.credits);
-      }
-    } catch {
-      // background silent
+    if (dropdownOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
     }
-  }, [user?.role]);
-
-  // Real-time auto sync
-  useEffect(() => {
-    loadSidebarQuota();
-    const interval = setInterval(loadSidebarQuota, 30000); // sync every 30s
-    const onQuotaUpdated = () => loadSidebarQuota();
-    window.addEventListener("quotaUpdated", onQuotaUpdated);
-    window.addEventListener("quota-updated", onQuotaUpdated);
-    return () => {
-      clearInterval(interval);
-      window.removeEventListener("quotaUpdated", onQuotaUpdated);
-      window.removeEventListener("quota-updated", onQuotaUpdated);
-    };
-  }, [loadSidebarQuota]);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [dropdownOpen]);
 
   const handleLogout = async () => {
-    try {
-      await logout();
-      toast.success("Logged out successfully");
-      navigate("/login");
-    } catch {
-      toast.error("Logout failed");
-    }
+    setConfirmLogout(false);
+    setDropdownOpen(false);
+    setOpen(false);
+    await logout();
+    toast.info("Logged out successfully");
+    navigate("/login", { replace: true });
   };
-
-  const totalUsed = sidebarCapacity.active + sidebarCapacity.pending;
-  const remaining = Math.max(0, tier.maxBooks - totalUsed);
-  const isFull = tier.tier !== "ultimate" && totalUsed >= tier.maxBooks;
-  const percentage =
-    tier.tier === "ultimate"
-      ? 100
-      : Math.min(100, Math.round((totalUsed / tier.maxBooks) * 100));
-
-  const upgradeLabel =
-    tier.tier === "free"
-      ? "Upgrade to Premium"
-      : tier.tier === "premium"
-      ? "Upgrade to Ultimate"
-      : "Active";
 
   return (
     <div className="app">
-      <div
-        className={`overlay ${open ? "show" : ""}`}
-        onClick={() => setOpen(false)}
-        aria-hidden="true"
-      />
+      <div className={`overlay ${open ? "show" : ""}`} onClick={() => setOpen(false)} />
 
+      {/* ── Sidebar ── */}
       <aside className={`sidebar ${open ? "open" : ""}`}>
-        <Link
-          to={user?.role === "librarian" ? "/librarian" : "/purchaser"}
-          className="logo"
-          onClick={() => setOpen(false)}
-        >
+        <div className="logo">
           <span className="logo-mark">
-            <BookIcon />
+            <BookIcon size={20} />
           </span>
-          <span>LibraryHub</span>
-        </Link>
+          <div>
+            <div style={{ lineHeight: 1.1, fontSize: "1.15rem", fontWeight: 800 }}>ReadHub</div>
+            <div style={{ fontSize: "0.68rem", fontWeight: 700, color: "var(--primary)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+              Digital E-Book Store
+            </div>
+          </div>
+        </div>
 
-        <nav className="nav">
-          {links.map((link) => {
-            const Icon = link.icon;
-            return (
-              <NavLink
-                key={link.to}
-                to={link.to}
-                end={link.end}
-                className={({ isActive }) => (isActive ? "active" : "")}
-                onClick={() => setOpen(false)}
-              >
-                <Icon />
-                <span>{link.label}</span>
-              </NavLink>
-            );
-          })}
+        <nav className="nav" style={{ flex: 1, overflowY: "auto" }}>
+          {sections.map((section, idx) => (
+            <div key={idx} style={{ marginBottom: 10 }}>
+              <div className="nav-section-title">{section.title}</div>
+              {section.items.map(({ to, label, icon: Icon, end }) => (
+                <NavLink
+                  key={to}
+                  to={to}
+                  end={end}
+                  onClick={() => setOpen(false)}
+                  className={({ isActive }) => (isActive ? "active" : "")}
+                >
+                  <Icon size={18} />
+                  <span>{label}</span>
+                </NavLink>
+              ))}
+            </div>
+          ))}
         </nav>
 
-        {user?.role === "purchaser" && (
-          <div
-            onClick={() => {
-              if (tier.tier !== "ultimate") setShowMembershipModal(true);
-            }}
-            style={{
-              marginTop: "auto",
-              padding: "10px 12px",
-              background: "var(--soft-2, rgba(92,107,192,0.06))",
-              border: "1px solid var(--border, rgba(0,0,0,0.08))",
-              borderRadius: 10,
-              cursor: tier.tier !== "ultimate" ? "pointer" : "default",
-              transition: "transform 0.15s ease",
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: 6,
-              }}
-            >
-              <span
-                style={{
-                  fontSize: "0.75rem",
-                  fontWeight: 700,
-                  textTransform: "uppercase",
-                  letterSpacing: "0.5px",
-                  color: "var(--muted, #666)",
-                }}
-              >
-                {tier.name} Capacity
-              </span>
-              <span
-                style={{
-                  fontSize: "0.72rem",
-                  fontWeight: 700,
-                  color: isFull ? "#dc2626" : "var(--text, #333)",
-                }}
-              >
-                {tier.tier === "ultimate" ? `${sidebarCapacity.active} issued` : `${totalUsed} / ${tier.maxBooks}`}
-              </span>
+        {/* ── User Card with Active Subscription Limit ── */}
+        <div
+          onClick={() => navigate(`/${user?.role}/profile`)}
+          title="View Account & Membership Limits"
+          style={{
+            padding: "12px 14px",
+            borderRadius: "14px",
+            background: "var(--soft-2)",
+            marginTop: "auto",
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+            cursor: "pointer",
+            transition: "all 0.2s ease",
+            border: "1px solid var(--border)",
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.borderColor = "var(--primary)")}
+          onMouseLeave={(e) => (e.currentTarget.style.borderColor = "var(--border)")}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div className="avatar" style={{ width: 34, height: 34, fontSize: 13, flexShrink: 0 }}>
+              {user?.name?.[0]?.toUpperCase()}
             </div>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontSize: "0.84rem", fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: "var(--text)" }}>
+                {user?.name}
+              </div>
+              <div style={{ fontSize: "0.72rem", color: "var(--muted)", display: "flex", alignItems: "center", gap: 5, marginTop: 1 }}>
+                {user?.role === "librarian" ? (
+                  "Store Administrator"
+                ) : (
+                  <>
+                    <span
+                      style={{
+                        display: "inline-block",
+                        width: 7,
+                        height: 7,
+                        borderRadius: "50%",
+                        background:
+                          tier.tier === "ultimate"
+                            ? "#f59e0b"
+                            : tier.tier === "premium"
+                            ? "#6366f1"
+                            : "var(--primary)",
+                      }}
+                    />
+                    <span style={{ fontWeight: 700, color: "var(--text)" }}>
+                      {tier.badge} Plan
+                    </span>
+                    <span>•</span>
+                    <span>
+                      {tier.maxBooks === Infinity
+                        ? "Unlimited"
+                        : `${activeRentalsCount}/${tier.maxBooks} Rentals`}
+                    </span>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
 
-            {tier.tier !== "ultimate" && (
-              <div style={{ width: "100%", height: 5, background: "rgba(0,0,0,0.08)", borderRadius: 3, overflow: "hidden" }}>
+          {/* Capacity Progress Bar for Readers */}
+          {user?.role === "purchaser" && (
+            <div style={{ marginTop: 2 }}>
+              <div
+                style={{
+                  height: 4,
+                  width: "100%",
+                  background: "var(--border)",
+                  borderRadius: 99,
+                  overflow: "hidden",
+                }}
+              >
                 <div
                   style={{
                     height: "100%",
-                    width: `${percentage}%`,
-                    background: isFull ? "#ef4444" : "var(--primary, #5c6bc0)",
-                    borderRadius: 3,
+                    width:
+                      tier.maxBooks === Infinity
+                        ? "100%"
+                        : `${Math.min(100, Math.round((activeRentalsCount / tier.maxBooks) * 100))}%`,
+                    background:
+                      tier.tier === "ultimate"
+                        ? "linear-gradient(90deg, #f59e0b, #d97706)"
+                        : activeRentalsCount >= tier.maxBooks
+                        ? "var(--danger)"
+                        : "linear-gradient(90deg, var(--primary), #8b5cf6)",
+                    borderRadius: 99,
                     transition: "width 0.3s ease",
                   }}
                 />
               </div>
-            )}
-
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6, fontSize: "0.7rem", color: "var(--muted, #666)" }}>
-              <span>
-                {tier.tier === "ultimate"
-                  ? "Unlimited capacity"
-                  : isFull
-                  ? "Limit Reached"
-                  : `${remaining} slot(s) left`}
-              </span>
-              <span style={{ color: "var(--primary, #5c6bc0)", fontWeight: 600, whiteSpace: "nowrap" }}>
-                {upgradeLabel}
-              </span>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  fontSize: "0.68rem",
+                  color: "var(--muted)",
+                  marginTop: 4,
+                  fontWeight: 600,
+                }}
+              >
+                <span>
+                  {tier.maxBooks === Infinity
+                    ? `${activeRentalsCount} active`
+                    : `${activeRentalsCount} active`}
+                </span>
+                <span>
+                  {tier.maxBooks === Infinity
+                    ? "No Limit"
+                    : `${Math.max(0, tier.maxBooks - activeRentalsCount)} slot(s) left`}
+                </span>
+              </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </aside>
 
+      {/* ── Main Topbar & Content ── */}
       <div className="main">
         <header className="topbar">
           <div className="topbar-left">
-            <button
-              className="icon-btn menu-btn"
-              onClick={() => setOpen(true)}
-              aria-label="Open menu"
-            >
+            <button className="icon-btn menu-btn" onClick={() => setOpen(true)} aria-label="Open menu">
               <MenuIcon />
             </button>
+            <div style={{ fontSize: "0.88rem", fontWeight: 600, color: "var(--muted)" }}>
+              {user?.role === "librarian" ? "Admin Console" : "Digital Reading Universe"}
+            </div>
           </div>
 
           <div className="topbar-right">
-            {/* ── LIVE PURCHASER CREDITS BADGE (Pure Inline SVG) ── */}
+            <ThemeToggle />
+
+            {/* Pass Upgrade Pill (Reader only) */}
             {user?.role === "purchaser" && (
-              <div
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => setShowMembershipModal(true)}
                 style={{
-                  display: "inline-flex",
+                  background:
+                    tier.tier === "ultimate"
+                      ? "linear-gradient(135deg, #f59e0b, #d97706)"
+                      : tier.tier === "premium"
+                      ? "linear-gradient(135deg, #6366f1, #8b5cf6)"
+                      : "var(--surface)",
+                  color: tier.tier === "free" ? "var(--text)" : "#fff",
+                  border: tier.tier === "free" ? "1px solid var(--border)" : "none",
+                  fontWeight: 700,
+                  display: "flex",
                   alignItems: "center",
                   gap: 6,
-                  background: "#fef3c7",
-                  border: "1px solid #fde68a",
-                  color: "#b45309",
-                  padding: "5px 12px",
-                  borderRadius: 20,
-                  fontWeight: 800,
-                  fontSize: "0.82rem",
-                  cursor: "default",
-                  boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
+                  cursor: "pointer",
+                  borderRadius: "999px",
+                  padding: "6px 14px",
                 }}
-                title="Your credits balance (Earn +10 credits on every on-time book return!)"
               >
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
-                  <circle cx="12" cy="12" r="10" fill="#f59e0b" />
-                  <circle cx="12" cy="12" r="7.5" stroke="#ffffff" strokeWidth="1.5" fill="none" />
-                  <text x="12" y="16" textAnchor="middle" fill="#ffffff" fontSize="11" fontWeight="900">C</text>
-                </svg>
-                <span>{userCredits} Credits</span>
-              </div>
+                <span>{tier.badge} Pass</span>
+                {tier.tier === "free" && <span style={{ fontSize: "0.75rem", opacity: 0.8 }}>(Upgrade)</span>}
+              </button>
             )}
 
-            <ThemeToggle />
-            <NotificationBell />
-
-            <div ref={menuRef} style={{ position: "relative" }}>
+            {/* ── User Avatar & Dropdown Menu ── */}
+            <div style={{ position: "relative" }} ref={dropdownRef}>
               <button
                 type="button"
                 onClick={() => setDropdownOpen((prev) => !prev)}
+                title="Account menu"
                 style={{
+                  background: "none",
+                  border: "none",
+                  padding: 0,
+                  cursor: "pointer",
                   display: "flex",
                   alignItems: "center",
-                  gap: 10,
-                  background: dropdownOpen ? "var(--soft-2, rgba(92,107,192,0.1))" : "transparent",
-                  border: "1px solid",
-                  borderColor: dropdownOpen ? "var(--border, #e5e7eb)" : "transparent",
-                  borderRadius: 24,
-                  padding: "4px 10px 4px 6px",
-                  cursor: "pointer",
-                  transition: "all 0.15s ease",
                 }}
               >
                 {avatarSrc && !avatarBroken ? (
@@ -331,213 +361,168 @@ export default function AppLayout() {
                     className="avatar"
                     src={avatarSrc}
                     alt=""
-                    referrerPolicy="no-referrer"
                     onError={() => setAvatarBroken(true)}
-                    style={{ width: 34, height: 34, borderRadius: "50%", objectFit: "cover" }}
+                    style={{ objectFit: "cover", cursor: "pointer" }}
                   />
                 ) : (
-                  <span className="avatar" style={{ width: 34, height: 34, fontSize: "0.85rem" }}>
+                  <span className="avatar" style={{ cursor: "pointer" }}>
                     {user?.name?.[0]?.toUpperCase()}
                   </span>
                 )}
-
-                <div className="user-meta" style={{ textAlign: "left" }}>
-                  <strong style={{ fontSize: "0.88rem", lineHeight: 1.2 }}>{user?.name}</strong>
-                  <span style={{ fontSize: "0.75rem", color: "var(--muted, #666)" }}>
-                    {user?.role}
-                  </span>
-                </div>
               </button>
 
+              {/* Dropdown Panel */}
               {dropdownOpen && (
                 <div
                   style={{
                     position: "absolute",
-                    top: "calc(100% + 8px)",
+                    top: "calc(100% + 10px)",
                     right: 0,
-                    width: 250,
-                    background: "var(--surface, #ffffff)",
-                    border: "1px solid var(--border, #e5e7eb)",
-                    borderRadius: 12,
-                    boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.12), 0 8px 10px -6px rgba(0, 0, 0, 0.06)",
-                    padding: 6,
-                    zIndex: 50,
+                    width: "250px",
+                    background: "var(--surface)",
+                    borderRadius: "14px",
+                    border: "1px solid var(--border)",
+                    boxShadow: "0 12px 30px rgba(0, 0, 0, 0.16)",
+                    zIndex: 100,
+                    overflow: "hidden",
+                    animation: "toast-in 0.15s ease-out",
                   }}
                 >
-                  <div style={{ padding: "8px 12px 10px 12px", borderBottom: "1px solid var(--border, #f1f5f9)" }}>
-                    <div style={{ fontWeight: 700, fontSize: "0.92rem", color: "var(--text, #111)" }}>
-                      {user?.name}
-                    </div>
-                    <div style={{ fontSize: "0.78rem", color: "var(--muted, #666)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {/* User Header */}
+                  <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--border)", background: "var(--soft-2)" }}>
+                    <div style={{ fontWeight: 800, fontSize: "0.92rem", color: "var(--text)" }}>{user?.name}</div>
+                    <div style={{ fontSize: "0.76rem", color: "var(--muted)", marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                       {user?.email}
                     </div>
-                    <div style={{ marginTop: 8, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                      <span
-                        style={{
-                          fontSize: "0.72rem",
-                          fontWeight: 700,
-                          padding: "3px 8px",
-                          borderRadius: 12,
-                          display: "inline-block",
-                          background:
-                            user?.role === "purchaser"
-                              ? tier.tier === "ultimate"
-                                ? "linear-gradient(135deg, #f59e0b, #d97706)"
-                                : tier.tier === "premium"
-                                ? "linear-gradient(135deg, #6366f1, #4338ca)"
-                                : "rgba(92, 107, 192, 0.1)"
-                              : "rgba(92, 107, 192, 0.1)",
-                          color:
-                            user?.role === "purchaser" && tier.tier !== "free"
-                              ? "#ffffff"
-                              : "var(--primary, #5c6bc0)",
-                          textTransform: "capitalize",
-                        }}
-                      >
-                        {user?.role === "purchaser" ? `${tier.name} Plan` : `${user?.role} Staff`}
-                      </span>
-
-                      {user?.role === "purchaser" && (
-                        <span
-                          style={{
-                            fontSize: "0.72rem",
-                            fontWeight: 700,
-                            padding: "3px 8px",
-                            borderRadius: 12,
-                            background: "#fef3c7",
-                            color: "#b45309",
-                          }}
-                        >
-                          🪙 {userCredits} Credits
-                        </span>
-                      )}
-                    </div>
+                    <span
+                      className="badge"
+                      style={{
+                        marginTop: 6,
+                        background: user?.role === "librarian" ? "var(--primary)" : "var(--soft)",
+                        color: user?.role === "librarian" ? "#fff" : "var(--primary)",
+                      }}
+                    >
+                      {user?.role === "librarian" ? "Store Administrator" : `${tier.badge} Pass`}
+                    </span>
                   </div>
 
-                  <div style={{ padding: "4px 0" }}>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setDropdownOpen(false);
-                        navigate(`/${user?.role}/profile?tab=profile`);
-                      }}
+                  {/* Dropdown Links */}
+                  <div style={{ padding: "6px" }}>
+                    {/* Profile & Info */}
+                    <Link
+                      to={`/${user?.role}/profile?tab=profile`}
+                      onClick={() => setDropdownOpen(false)}
                       style={{
-                        width: "100%",
                         display: "flex",
                         alignItems: "center",
                         gap: 10,
-                        padding: "9px 12px",
-                        border: "none",
-                        background: "transparent",
-                        borderRadius: 8,
-                        cursor: "pointer",
-                        fontSize: "0.88rem",
-                        color: "var(--text, #333)",
-                        textAlign: "left",
+                        padding: "10px 12px",
+                        borderRadius: "8px",
+                        fontSize: "0.85rem",
+                        fontWeight: 600,
+                        color: "var(--text)",
                       }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--soft)")}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                     >
-                      <UserIcon size={16} />
-                      <div>
-                        <div style={{ fontWeight: 600, lineHeight: 1.2 }}>Profile</div>
-                        <div style={{ fontSize: "0.72rem", color: "var(--muted, #666)" }}>
-                          {user?.role === "purchaser" ? "Plan & details" : "Account details"}
-                        </div>
-                      </div>
-                    </button>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                        <circle cx="12" cy="7" r="4" />
+                      </svg>
+                      Profile & Account
+                    </Link>
 
+                    {/* Store Passes (for readers) */}
                     {user?.role === "purchaser" && (
                       <button
                         type="button"
                         onClick={() => {
                           setDropdownOpen(false);
-                          navigate(`/${user?.role}/profile?tab=transactions`);
+                          setShowMembershipModal(true);
                         }}
                         style={{
                           width: "100%",
+                          background: "none",
+                          border: "none",
                           display: "flex",
                           alignItems: "center",
                           gap: 10,
-                          padding: "9px 12px",
-                          border: "none",
-                          background: "transparent",
-                          borderRadius: 8,
+                          padding: "10px 12px",
+                          borderRadius: "8px",
+                          fontSize: "0.85rem",
+                          fontWeight: 600,
+                          color: "var(--text)",
                           cursor: "pointer",
-                          fontSize: "0.88rem",
-                          color: "var(--text, #333)",
                           textAlign: "left",
                         }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = "var(--soft)")}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                       >
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <rect x="2" y="5" width="20" height="14" rx="2" />
-                          <line x1="2" y1="10" x2="22" y2="10" />
+                          <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
                         </svg>
-                        <div>
-                          <div style={{ fontWeight: 600, lineHeight: 1.2 }}>Transaction History</div>
-                          <div style={{ fontSize: "0.72rem", color: "var(--muted, #666)" }}>All payments & fines</div>
-                        </div>
+                        Membership Passes
                       </button>
                     )}
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setDropdownOpen(false);
-                        navigate(`/${user?.role}/profile?tab=settings`);
-                      }}
+                    {/* Settings & Delete Account */}
+                    <Link
+                      to={`/${user?.role}/profile?tab=settings`}
+                      onClick={() => setDropdownOpen(false)}
                       style={{
-                        width: "100%",
                         display: "flex",
                         alignItems: "center",
                         gap: 10,
-                        padding: "9px 12px",
-                        border: "none",
-                        background: "transparent",
-                        borderRadius: 8,
-                        cursor: "pointer",
-                        fontSize: "0.88rem",
-                        color: "var(--text, #333)",
-                        textAlign: "left",
+                        padding: "10px 12px",
+                        borderRadius: "8px",
+                        fontSize: "0.85rem",
+                        fontWeight: 600,
+                        color: "var(--text)",
                       }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--soft)")}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                     >
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <circle cx="12" cy="12" r="3" />
                         <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
                       </svg>
-                      <div>
-                        <div style={{ fontWeight: 600, lineHeight: 1.2 }}>Settings</div>
-                        <div style={{ fontSize: "0.72rem", color: "var(--muted, #666)" }}>Password & security</div>
-                      </div>
-                    </button>
+                      Settings & Delete Account
+                    </Link>
                   </div>
 
-                  <div style={{ height: 1, background: "var(--border, #f1f5f9)", margin: "4px 0" }} />
+                  {/* Divider */}
+                  <div style={{ height: "1px", background: "var(--border)", margin: "4px 0" }} />
 
-                  {/* Logout */}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setDropdownOpen(false);
-                      setConfirmLogout(true);
-                    }}
-                    style={{
-                      width: "100%",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 10,
-                      padding: "9px 12px",
-                      border: "none",
-                      background: "transparent",
-                      borderRadius: 8,
-                      cursor: "pointer",
-                      fontSize: "0.88rem",
-                      fontWeight: 600,
-                      color: "var(--text, #333)",
-                      textAlign: "left",
-                    }}
-                  >
-                    <LogoutIcon size={16} />
-                    <span>Logout</span>
-                  </button>
+                  {/* Logout Button */}
+                  <div style={{ padding: "6px" }}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDropdownOpen(false);
+                        setConfirmLogout(true);
+                      }}
+                      style={{
+                        width: "100%",
+                        background: "none",
+                        border: "none",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        padding: "10px 12px",
+                        borderRadius: "8px",
+                        fontSize: "0.85rem",
+                        fontWeight: 700,
+                        color: "var(--danger)",
+                        cursor: "pointer",
+                        textAlign: "left",
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--danger-bg)")}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                    >
+                      <LogoutIcon size={16} />
+                      Sign Out
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -551,9 +536,9 @@ export default function AppLayout() {
 
       {confirmLogout && (
         <ConfirmModal
-          title="Logout"
-          message="Are you sure you want to logout?"
-          confirmText="Logout"
+          title="Sign Out"
+          message="Are you sure you want to log out of ReadHub?"
+          confirmText="Sign Out"
           danger
           onClose={() => setConfirmLogout(false)}
           onConfirm={handleLogout}

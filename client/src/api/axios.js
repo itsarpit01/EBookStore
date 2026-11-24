@@ -1,12 +1,7 @@
 import axios from "axios";
 
-export const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
-
-export const SERVER_URL =
-  import.meta.env.VITE_SERVER_URL ||
-  (import.meta.env.VITE_API_URL
-    ? import.meta.env.VITE_API_URL.replace(/\/api\/?$/, "")
-    : "http://localhost:5000");
+export const API_URL = "http://localhost:5001/api";
+export const SERVER_URL = "http://localhost:5001";
 
 export const getImageUrl = (path) => {
   if (!path) return null;
@@ -16,10 +11,9 @@ export const getImageUrl = (path) => {
 
 const api = axios.create({
   baseURL: API_URL,
-  withCredentials: true, // browser cookie bhejega aur lega
+  withCredentials: true,
 });
 
-// 401 par logout (login aur session-check ko chhod ke)
 api.interceptors.response.use(
   (res) => res,
   (error) => {

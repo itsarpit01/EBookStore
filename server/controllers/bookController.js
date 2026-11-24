@@ -3,6 +3,7 @@ import path from "path";
 import Book from "../models/Book.js";
 import Issue from "../models/Issue.js";
 import User from "../models/User.js";
+import PurchaseRequest from "../models/PurchaseRequest.js";
 import { bookQuerySchema } from "../validators/bookQueryValidator.js";
 import { sendNewBookAlertEmail, sendBookDiscontinuedEmail } from "../utils/mailer.js";
 import { sendNotification } from "./notificationController.js";
@@ -91,7 +92,7 @@ export const getBookById = async (req, res) => {
 
 // POST /api/books (librarian)
 export const createBook = async (req, res) => {
-  const { isbn, totalCopies } = req.body;
+  const { isbn, totalCopies, creditPrice, price } = req.body;
 
   const exists = await Book.findOne({ isbn });
   if (exists) {
@@ -99,7 +100,12 @@ export const createBook = async (req, res) => {
     return res.status(409).json({ message: "Book with this ISBN already exists" });
   }
 
-  const bookData = { ...req.body, availableCopies: totalCopies };
+  const bookData = {
+    ...req.body,
+    availableCopies: totalCopies || 9999,
+    creditPrice: creditPrice || Math.max(1, Math.round((Number(price) || 100) / 10)),
+  };
+
   if (req.file) bookData.coverImage = `/uploads/books/${req.file.filename}`;
 
   const book = await Book.create(bookData);
@@ -239,7 +245,7 @@ export const discontinueBook = async (req, res) => {
   }
 };
 
-// POST /api/books/:id/digital-access (purchaser: direct instant unlock + librarian tracking)
+// POST /api/books/:id/digital-access (purchaser: direct instant unlock + strict duplicate check)
 export const purchaseOrRentDigitalBook = async (req, res) => {
   try {
     const { plan, paymentMode = "credits" } = req.body;
@@ -266,6 +272,47 @@ export const purchaseOrRentDigitalBook = async (req, res) => {
     }
     if (user.credits === undefined || user.credits === null) {
       user.credits = 100;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // ⭐ STRICT DUPLICATE CHECK: 1 User cannot rent or buy twice ⭐
+    // ─────────────────────────────────────────────────────────────
+    const existingEntry = user.digitalShelf.find(
+      (item) => item.book && item.book.toString() === bookId.toString()
+    );
+
+    if (existingEntry) {
+      // 1. Agar user ke paas already Lifetime Ownership hai:
+      if (existingEntry.plan === "lifetime" || !existingEntry.expiresAt) {
+        return res.status(400).json({
+          message: "You already own lifetime access to this e-book. You cannot purchase or rent it again.",
+        });
+      }
+
+      // 2. Agar user ka Rental pass abhi active hai (expire nahi hua):
+      if (new Date(existingEntry.expiresAt) > new Date()) {
+        const validTill = new Date(existingEntry.expiresAt).toLocaleDateString("en-IN", {
+          day: "2-digit",
+          month: "short",
+          year: "numeric",
+        });
+        return res.status(400).json({
+          message: `You already have an active rental for this e-book valid until ${validTill}. You cannot rent or buy it again while active.`,
+        });
+      }
+    }
+
+    // Double check active Issue lease record
+    const activeIssue = await Issue.findOne({
+      book: bookId,
+      member: userId,
+      status: "issued",
+      dueDate: { $gt: new Date() },
+    });
+    if (activeIssue) {
+      return res.status(400).json({
+        message: "You already have an active rental pass for this e-book.",
+      });
     }
 
     // 1. Updated Pricing Map: 1 Day = 10, 1 Week = 50, 1 Year = 70, Lifetime = 150
@@ -297,7 +344,7 @@ export const purchaseOrRentDigitalBook = async (req, res) => {
 
     // 4. Update Digital Shelf
     const existingIndex = user.digitalShelf.findIndex(
-      (item) => item.book.toString() === bookId.toString()
+      (item) => item.book && item.book.toString() === bookId.toString()
     );
 
     const shelfEntry = {
@@ -317,22 +364,22 @@ export const purchaseOrRentDigitalBook = async (req, res) => {
 
     await user.save();
 
-    // 5. Create or Update Issue record so Librarian has complete tracking of user & duration
+    // 5. Create or Update Issue record for live reading lease tracking
     const issueDueDate = expiresAt || new Date(Date.now() + 3650 * 24 * 60 * 60 * 1000);
-    const existingIssue = await Issue.findOne({
+    let issueDoc = await Issue.findOne({
       book: bookId,
       member: userId,
       status: "issued",
     });
 
-    if (existingIssue) {
-      existingIssue.dueDate = issueDueDate;
-      existingIssue.accessMode = "digital";
-      existingIssue.digitalPlan = plan;
-      existingIssue.paymentMode = paymentMode;
-      await existingIssue.save();
+    if (issueDoc) {
+      issueDoc.dueDate = issueDueDate;
+      issueDoc.accessMode = "digital";
+      issueDoc.digitalPlan = plan;
+      issueDoc.paymentMode = paymentMode;
+      await issueDoc.save();
     } else {
-      await Issue.create({
+      issueDoc = await Issue.create({
         book: bookId,
         member: userId,
         issuedBy: userId,
@@ -345,13 +392,32 @@ export const purchaseOrRentDigitalBook = async (req, res) => {
       });
     }
 
-    // 6. Send clean notification to the member
+    // ⭐ 6. CREATE ORDER LOG IN PurchaseRequest FOR ADMIN AUDIT & REVENUE TRACKING ⭐
+    await PurchaseRequest.create({
+      requestedBy: userId,
+      book: bookId,
+      title: book.title,
+      author: book.author,
+      isbn: book.isbn,
+      quantity: 1,
+      neededUntil: issueDueDate,
+      reason: `Digital ${plan.toUpperCase()} Access (${paymentMode === "credits" ? `${cost.credits} Credits` : `₹${cost.inr}`})`,
+      status: "approved",
+      accessMode: "digital",
+      digitalPlan: plan,
+      paymentMode: paymentMode,
+      creditCost: paymentMode === "credits" ? cost.credits : cost.inr,
+      creditsDeducted: paymentMode === "credits",
+      issue: issueDoc._id,
+    });
+
+    // 7. Send notification to reader
     sendNotification({
       userId,
       title: "Digital Access Unlocked",
-      message: `You now have access to "${book.title}" (${plan.toUpperCase()} pass). Active in your Digital Shelf and My Issues.`,
+      message: `You now have access to "${book.title}" (${plan.toUpperCase()} pass). Added to your My Library.`,
       type: "success",
-      link: "/purchaser/books",
+      link: "/purchaser/my-issues",
     });
 
     res.json({

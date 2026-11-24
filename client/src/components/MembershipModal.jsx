@@ -48,19 +48,30 @@ export default function MembershipModal({ onClose }) {
   };
 
   const handleUpgrade = async (plan) => {
-    if (!window.Razorpay) {
-      toast.error("Razorpay SDK failed to load. Please refresh the page and try again.");
+    // Dynamic fallback: agar script load na hui ho toh on-the-fly load karein
+    let razorpayLoaded = Boolean(window.Razorpay);
+    if (!razorpayLoaded) {
+      razorpayLoaded = await new Promise((resolve) => {
+        const script = document.createElement("script");
+        script.src = "https://checkout.razorpay.com/v1/checkout.js";
+        script.onload = () => resolve(true);
+        script.onerror = () => resolve(false);
+        document.body.appendChild(script);
+      });
+    }
+
+    if (!razorpayLoaded || !window.Razorpay) {
+      toast.error("Razorpay SDK failed to load. Please check your internet connection.");
       return;
     }
 
     setProcessingTier(plan.tier);
 
     try {
-      // 1. Create order on backend (Backend automatically applies Model B prorated deduction)
+      // 1. Create order on backend
       const res = await api.post("/payment/create-order", { tier: plan.tier });
       const { orderId, amount, currency, keyId } = res.data;
 
-      // Real-time signal: History me pending show ho sake
       window.dispatchEvent(new Event("quota-updated"));
 
       // 2. Open Razorpay Checkout modal
@@ -68,15 +79,15 @@ export default function MembershipModal({ onClose }) {
         key: keyId || import.meta.env.VITE_RAZORPAY_KEY_ID,
         amount,
         currency: currency || "INR",
-        name: "Library Management",
-        description: `${plan.name} Membership Plan (${plan.durationMonths} Months)`,
+        name: "ReadHub E-Book Store",
+        description: `${plan.name} Membership Pass (${plan.durationMonths} Months)`,
         order_id: orderId,
         prefill: {
           name: user?.name || "",
           email: user?.email || "",
         },
         theme: {
-          color: plan.tier === "ultimate" ? "#f59e0b" : "#5b3df5",
+          color: plan.tier === "ultimate" ? "#f59e0b" : "#6366f1",
         },
         handler: async function (response) {
           try {
@@ -138,6 +149,7 @@ export default function MembershipModal({ onClose }) {
       razorpayInstance.open();
     } catch (err) {
       toast.error(getErrorMessage(err));
+    } finally {
       setProcessingTier(null);
     }
   };
@@ -206,16 +218,16 @@ export default function MembershipModal({ onClose }) {
   };
 
   const getPlanSubtitle = (tier) => {
-    if (tier === "ultimate") return "For power readers with zero limits";
-    if (tier === "premium") return "For active readers & fast approvals";
-    return "Basic reading access for all members";
+    if (tier === "ultimate") return "For power readers with maximum store perks";
+    if (tier === "premium") return "For active readers with extra rental passes";
+    return "Basic pay-as-you-go store access";
   };
 
   return (
-    <Modal title="Membership Plans" onClose={onClose} maxWidth="900px">
+    <Modal title="Store Membership Passes" onClose={onClose} maxWidth="900px">
       <div style={{ textAlign: "center", marginBottom: 24 }}>
         <p style={{ margin: 0, color: "var(--text-secondary, #666)", fontSize: "0.95rem" }}>
-          Choose a plan that fits your reading habits. Upgrade or renew anytime.
+          Choose a pass to unlock store credits, rental discounts, and priority access.
         </p>
 
         {user?.membership?.expiresAt && currentTier.tier !== "free" && (
@@ -240,12 +252,11 @@ export default function MembershipModal({ onClose }) {
               <line x1="8" y1="2" x2="8" y2="6" />
               <line x1="3" y1="10" x2="21" y2="10" />
             </svg>
-            <span>Current plan expires on: {formatDate(user.membership.expiresAt)}</span>
+            <span>Current pass valid until: {formatDate(user.membership.expiresAt)}</span>
           </div>
         )}
       </div>
 
-      {/* Modern 3-Column Plan Cards */}
       <div
         style={{
           display: "grid",
@@ -261,7 +272,6 @@ export default function MembershipModal({ onClose }) {
           const isUltimate = plan.tier === "ultimate";
           const isPremium = plan.tier === "premium";
 
-          // Card accent styles
           let cardBorder = "1px solid var(--border, #e5e7eb)";
           let cardBg = "var(--surface, #ffffff)";
           let cardShadow = "0 2px 8px rgba(0, 0, 0, 0.04)";
@@ -304,7 +314,6 @@ export default function MembershipModal({ onClose }) {
                 transition: "transform 0.18s ease, box-shadow 0.18s ease",
               }}
             >
-              {/* Top Banner Tag */}
               {isCurrent ? (
                 <span
                   style={{
@@ -326,7 +335,7 @@ export default function MembershipModal({ onClose }) {
                     textTransform: "uppercase",
                   }}
                 >
-                  Active Plan
+                  Active Pass
                 </span>
               ) : isUltimate ? (
                 <span
@@ -349,7 +358,6 @@ export default function MembershipModal({ onClose }) {
                 </span>
               ) : null}
 
-              {/* Header: Icon + Title + Subtitle */}
               <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
                 {renderPlanIcon(plan.tier)}
                 <div>
@@ -370,7 +378,6 @@ export default function MembershipModal({ onClose }) {
                 </div>
               </div>
 
-              {/* Price Block */}
               <div
                 style={{
                   padding: "12px 0 14px 0",
@@ -433,7 +440,6 @@ export default function MembershipModal({ onClose }) {
                 )}
               </div>
 
-              {/* Perks List */}
               <ul
                 style={{
                   listStyle: "none",
@@ -480,7 +486,6 @@ export default function MembershipModal({ onClose }) {
                 ))}
               </ul>
 
-              {/* Action Buttons */}
               <div style={{ marginTop: "auto" }}>
                 {isCurrent ? (
                   <button
@@ -504,10 +509,7 @@ export default function MembershipModal({ onClose }) {
                       gap: 6,
                     }}
                   >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="20 6 9 17 4 12" />
-                    </svg>
-                    Current Plan
+                    Active Pass
                   </button>
                 ) : plan.tier === "free" ? (
                   <button
@@ -524,7 +526,7 @@ export default function MembershipModal({ onClose }) {
                       border: "none",
                     }}
                   >
-                    Standard Plan
+                    Free Pass
                   </button>
                 ) : currentTier.tier === "ultimate" ? (
                   <button
@@ -562,11 +564,10 @@ export default function MembershipModal({ onClose }) {
                         : "0 4px 12px rgba(99, 102, 241, 0.3)",
                       border: "none",
                       cursor: "pointer",
-                      transition: "transform 0.15s ease, filter 0.15s ease",
                     }}
                   >
                     {isProcessing
-                      ? "Opening Checkout..."
+                      ? "Opening Razorpay..."
                       : proratedInfo
                       ? `Pay ₹${proratedInfo.payableAmount} & Upgrade`
                       : `Upgrade to ${plan.name}`}

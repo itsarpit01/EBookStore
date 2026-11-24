@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import api from "../api/axios";
 import { useToast } from "../context/ToastContext";
 import { getErrorMessage } from "../utils/errors";
-import { formatDate, daysLate } from "../utils/format";
+import { formatDate } from "../utils/format";
 import StatCard from "../components/StatCard";
 import { BookIcon, IssueIcon, ClockIcon, RequestIcon } from "../components/Icons";
 
@@ -20,8 +20,8 @@ export default function LibrarianHome() {
       .finally(() => setLoading(false));
   }, [toast]);
 
-  if (loading) return <p className="empty">Loading dashboard...</p>;
-  if (!stats) return <p className="empty">Could not load dashboard.</p>;
+  if (loading) return <p className="empty">Loading admin store analytics...</p>;
+  if (!stats) return <p className="empty">Could not load dashboard data.</p>;
 
   const { books, issues, purchaseRequests, recentIssues, overdueIssues } = stats;
 
@@ -29,48 +29,73 @@ export default function LibrarianHome() {
     <>
       <div className="page-head">
         <div>
-          <h2>Dashboard</h2>
-          <p>Overview of your library.</p>
+          <h2>Admin Analytics & Overview</h2>
+          <p>Real-time overview of your digital book store, inventory, and sales performance.</p>
         </div>
       </div>
 
+      {/* Modern E-Book Store Analytics Cards */}
       <div className="stat-grid">
         <StatCard
           icon={BookIcon}
-          label="Book titles"
-          value={books.totalTitles}
-          hint={`${books.availableCopies} of ${books.totalCopies} copies available`}
+          label="Total Inventory"
+          value={books?.totalTitles || 0}
+          hint={`${books?.totalTitles || 0} titles active in digital store`}
         />
-        <StatCard icon={IssueIcon} label="Currently issued" value={issues.issuedCount} tone="success" />
-        <StatCard icon={ClockIcon} label="Overdue" value={issues.overdueCount} tone="danger" />
+        <StatCard
+          icon={IssueIcon}
+          label="Active Readers"
+          value={issues?.issuedCount || 0}
+          tone="success"
+          hint="Currently active rental leases"
+        />
         <StatCard
           icon={RequestIcon}
-          label="Pending requests"
-          value={purchaseRequests.pending}
+          label="Total Sales & Orders"
+          value={purchaseRequests?.total || purchaseRequests?.approved || 0}
           tone="warning"
+          hint="Completed rentals & purchases"
+        />
+        <StatCard
+          icon={ClockIcon}
+          label="Expired Passes"
+          value={issues?.overdueCount || 0}
+          tone="danger"
+          hint="Rental passes expired"
         />
       </div>
 
       <div className="section-grid">
+        {/* Recent Readers & Leases */}
         <div className="card">
           <div className="section-title">
-            <h3>Overdue books</h3>
+            <h3>Recent Active Leases</h3>
             <Link to="/librarian/issues">View all</Link>
           </div>
-          {overdueIssues.length === 0 ? (
-            <p className="empty">No overdue books.</p>
+          {(!recentIssues || recentIssues.length === 0) ? (
+            <p className="empty">No recent reading activity recorded.</p>
           ) : (
             <div className="table-wrap">
               <table>
                 <thead>
-                  <tr><th>Book</th><th>Member</th><th>Late</th></tr>
+                  <tr>
+                    <th>Book</th>
+                    <th>Reader</th>
+                    <th>Valid Until</th>
+                  </tr>
                 </thead>
                 <tbody>
-                  {overdueIssues.map((i) => (
+                  {recentIssues.slice(0, 5).map((i) => (
                     <tr key={i._id}>
-                      <td>{i.book?.title}</td>
-                      <td>{i.member?.name}</td>
-                      <td><span className="badge badge-danger">{daysLate(i.dueDate)} days</span></td>
+                      <td>
+                        <div style={{ fontWeight: 600 }}>{i.book?.title}</div>
+                        <span className="cell-sub">{i.book?.author}</span>
+                      </td>
+                      <td>
+                        <div>{i.member?.name}</div>
+                        <span className="cell-sub">{i.member?.email}</span>
+                      </td>
+                      <td>{formatDate(i.dueDate)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -79,28 +104,38 @@ export default function LibrarianHome() {
           )}
         </div>
 
+        {/* Expired Leases */}
         <div className="card">
           <div className="section-title">
-            <h3>Recent issues</h3>
+            <h3>Expired Rental Passes</h3>
             <Link to="/librarian/issues">View all</Link>
           </div>
-          {recentIssues.length === 0 ? (
-            <p className="empty">No books issued yet.</p>
+          {(!overdueIssues || overdueIssues.length === 0) ? (
+            <p className="empty">No expired passes at this time.</p>
           ) : (
             <div className="table-wrap">
               <table>
                 <thead>
-                  <tr><th>Book</th><th>Member</th><th>Due</th><th>Status</th></tr>
+                  <tr>
+                    <th>Book</th>
+                    <th>Reader</th>
+                    <th>Expired On</th>
+                  </tr>
                 </thead>
                 <tbody>
-                  {recentIssues.map((i) => (
+                  {overdueIssues.slice(0, 5).map((i) => (
                     <tr key={i._id}>
-                      <td>{i.book?.title}</td>
-                      <td>{i.member?.name}</td>
-                      <td>{formatDate(i.dueDate)}</td>
                       <td>
-                        <span className={`badge ${i.status === "returned" ? "badge-success" : "badge-warning"}`}>
-                          {i.status}
+                        <div style={{ fontWeight: 600 }}>{i.book?.title}</div>
+                        <span className="cell-sub">{i.book?.author}</span>
+                      </td>
+                      <td>
+                        <div>{i.member?.name}</div>
+                        <span className="cell-sub">{i.member?.email}</span>
+                      </td>
+                      <td>
+                        <span style={{ color: "var(--danger)", fontWeight: 600 }}>
+                          {formatDate(i.dueDate)}
                         </span>
                       </td>
                     </tr>

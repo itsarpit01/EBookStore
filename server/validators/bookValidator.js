@@ -1,23 +1,26 @@
 import { z } from "zod";
 
 const isbnSchema = z
-  .string({ error: "ISBN is required" })
+  .string({ required_error: "ISBN is required" })
   .trim()
   .transform((v) => v.replace(/-/g, ""))
   .refine((v) => /^(\d{10}|\d{13})$/.test(v), "ISBN must be 10 or 13 digits");
 
-const emptyToUndefined = (v) => (v === "" || v === null ? undefined : v);
+// Agar multer se array aaye to pehli value le
+const emptyToUndefined = (v) => {
+  if (Array.isArray(v)) v = v[0];
+  return v === "" || v === null ? undefined : v;
+};
 
 const bookFields = {
-  title: z.string({ error: "Title is required" }).trim().min(1, "Title is required").max(150),
-  author: z.string({ error: "Author is required" }).trim().min(1, "Author is required").max(100),
+  title: z.string({ required_error: "Title is required" }).trim().min(1, "Title is required").max(150),
+  author: z.string({ required_error: "Author is required" }).trim().min(1, "Author is required").max(100),
   isbn: isbnSchema,
   category: z.string().trim().max(50),
   price: z.preprocess(
     emptyToUndefined,
-    z.coerce.number({ error: "Price is required" }).nonnegative("Price cannot be negative")
+    z.coerce.number({ required_error: "Price is required" }).nonnegative("Price cannot be negative")
   ),
-  // ── Optional Credit Price Field (Backend Validation) ──
   creditPrice: z.preprocess(
     emptyToUndefined,
     z.coerce.number().nonnegative("Credit price cannot be negative").optional()
@@ -25,7 +28,7 @@ const bookFields = {
   totalCopies: z.preprocess(
     emptyToUndefined,
     z.coerce
-      .number({ error: "Total copies is required" })
+      .number({ required_error: "Total copies is required" })
       .int("Total copies must be a whole number")
       .min(1, "At least 1 copy is required")
   ),
@@ -37,7 +40,7 @@ export const createBookSchema = z.object({
   totalCopies: z.preprocess(
     emptyToUndefined,
     z.coerce
-      .number({ error: "Total copies is required" })
+      .number({ required_error: "Total copies is required" })
       .int("Total copies must be a whole number")
       .min(1, "At least 1 copy is required")
       .default(1)

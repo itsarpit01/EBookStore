@@ -1,205 +1,171 @@
-const SERVER_URL =
-  import.meta.env.VITE_SERVER_URL ||
-  (import.meta.env.VITE_API_URL
-    ? import.meta.env.VITE_API_URL.replace(/\/api\/?$/, "")
-    : "http://localhost:5000");
+import { useEffect, useState } from "react";
 
-export default function BookCard({ book, actions }) {
-  const available = book.availableCopies > 0;
+const SERVER_URL = "http://localhost:5001";
 
-  // ── 7-Day New Arrival Calculation ──
-  const isNewArrival = (() => {
-    if (!book.createdAt || book.isDiscontinued) return false;
-    const createdTime = new Date(book.createdAt).getTime();
-    if (isNaN(createdTime)) return false;
-    const diffDays = (Date.now() - createdTime) / (1000 * 60 * 60 * 24);
-    return diffDays >= 0 && diffDays <= 7;
-  })();
+export default function BookCard({ book, actions, isUnlocked = false }) {
+  const [inWishlist, setInWishlist] = useState(false);
 
-  // ── Credits Calculation (Fallback: ₹10 = 1 Credit) ──
-  const credits =
-    book.creditPrice || Math.max(1, Math.round((book.price || 100) / 10));
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("readhub_wishlist") || "[]");
+      setInWishlist(saved.includes(book._id));
+    } catch {
+      setInWishlist(false);
+    }
+  }, [book._id]);
 
-  const coverSrc = book.coverImage
-    ? book.coverImage.startsWith("http")
-      ? book.coverImage
-      : `${SERVER_URL}${book.coverImage.startsWith("/") ? "" : "/"}${book.coverImage}`
-    : null;
+  const toggleWishlist = (e) => {
+    e.stopPropagation();
+    try {
+      const saved = JSON.parse(localStorage.getItem("readhub_wishlist") || "[]");
+      let updated;
+      if (saved.includes(book._id)) {
+        updated = saved.filter((id) => id !== book._id);
+        setInWishlist(false);
+      } else {
+        updated = [...saved, book._id];
+        setInWishlist(true);
+      }
+      localStorage.setItem("readhub_wishlist", JSON.stringify(updated));
+    } catch {
+      // fallback
+    }
+  };
 
   return (
-    <div
-      className="card book-card"
-      style={{
-        opacity: book.isDiscontinued ? 0.85 : 1,
-        border: book.isDiscontinued
-          ? "1px dashed #f87171"
-          : isNewArrival
-          ? "1px dashed #10b981"
-          : undefined,
-      }}
-    >
-      <div className="book-cover" style={{ position: "relative" }}>
-        {coverSrc ? (
+    <div className="card book-card">
+      {/* Floating Wishlist Heart */}
+      <button
+        type="button"
+        onClick={toggleWishlist}
+        title={inWishlist ? "Remove from wishlist" : "Save to wishlist"}
+        style={{
+          position: "absolute",
+          top: 12,
+          right: 12,
+          zIndex: 5,
+          background: "rgba(15, 23, 42, 0.75)",
+          backdropFilter: "blur(6px)",
+          border: "1px solid rgba(255, 255, 255, 0.15)",
+          borderRadius: "50%",
+          width: 34,
+          height: 34,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          cursor: "pointer",
+          transition: "transform 0.15s ease",
+        }}
+      >
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill={inWishlist ? "#f43f5e" : "none"}
+          stroke={inWishlist ? "#f43f5e" : "#ffffff"}
+          strokeWidth="2.2"
+        >
+          <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+        </svg>
+      </button>
+
+      {/* 3D E-Book Cover with Spine & Shadow */}
+      <div className="book-cover">
+        {book.coverImage ? (
           <img
-            src={coverSrc}
+            src={`${SERVER_URL}${book.coverImage}`}
             alt={book.title}
-            referrerPolicy="no-referrer"
-            style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: "inherit" }}
           />
         ) : (
-          <span>{book.title?.charAt(0)?.toUpperCase()}</span>
+          <div style={{ textAlign: "center", padding: "10px" }}>
+            <span style={{ fontSize: "2.8rem", fontWeight: 800, color: "#C8FF3D" }}>
+              {book.title.charAt(0).toUpperCase()}
+            </span>
+            <div style={{ fontSize: "0.75rem", textTransform: "uppercase", letterSpacing: "0.1em", opacity: 0.8, color: "#ffffff" }}>
+              E-Book
+            </div>
+          </div>
         )}
 
-        {/* ── RIBBONS (Discontinued > New Arrival) ── */}
-        {book.isDiscontinued ? (
-          <span
-            style={{
-              position: "absolute",
-              top: 8,
-              left: 8,
-              background: "#ef4444",
-              color: "#ffffff",
-              fontSize: "0.7rem",
-              fontWeight: 700,
-              padding: "2px 8px",
-              borderRadius: "4px",
-              letterSpacing: "0.5px",
-              textTransform: "uppercase",
-              boxShadow: "0 2px 4px rgba(0,0,0,0.2)",
-              zIndex: 2,
-            }}
-          >
-            Discontinued
-          </span>
-        ) : isNewArrival ? (
-          <span
-            style={{
-              position: "absolute",
-              top: 8,
-              left: 8,
-              background: "#10b981",
-              color: "#ffffff",
-              fontSize: "0.7rem",
-              fontWeight: 700,
-              padding: "2px 8px",
-              borderRadius: "4px",
-              letterSpacing: "0.5px",
-              textTransform: "uppercase",
-              boxShadow: "0 2px 4px rgba(0,0,0,0.2)",
-              zIndex: 2,
-            }}
-          >
-            New Arrival
-          </span>
-        ) : null}
+        <div
+          style={{
+            position: "absolute",
+            bottom: 8,
+            left: 14,
+            zIndex: 4,
+            background: "rgba(0, 0, 0, 0.65)",
+            backdropFilter: "blur(4px)",
+            color: "#ffffff",
+            padding: "2px 8px",
+            borderRadius: 4,
+            fontSize: "10px",
+            fontWeight: 700,
+            letterSpacing: "0.06em",
+            textTransform: "uppercase",
+          }}
+        >
+          Digital Edition
+        </div>
       </div>
 
+      {/* Book Metadata */}
       <div className="book-body">
         <h3 title={book.title}>{book.title}</h3>
-        <p className="book-author">{book.author}</p>
-        
+        <p className="book-author">by {book.author}</p>
+
         <div className="book-meta">
-          {book.category && <span className="badge">{book.category}</span>}
-          {book.isDiscontinued ? (
-            <span
-              className="badge"
-              style={{ background: "#fee2e2", color: "#dc2626", fontWeight: 600 }}
-              title={book.discontinueReason ? `Reason: ${book.discontinueReason}` : "Discontinued"}
-            >
-              Retired Catalog
+          {book.category && (
+            <span className="badge" style={{ background: "var(--soft)", color: "var(--primary)" }}>
+              {book.category}
+            </span>
+          )}
+          {isUnlocked ? (
+            <span className="badge badge-success">
+              ✓ In Your Library
             </span>
           ) : (
-            <span className={`badge ${available ? "badge-success" : "badge-danger"}`}>
-              {available ? `${book.availableCopies}/${book.totalCopies} available` : "Not available"}
+            <span className="badge" style={{ background: "var(--soft-2)", color: "var(--muted)" }}>
+              Store Available
             </span>
           )}
         </div>
 
-        <p className="book-isbn">ISBN {book.isbn}</p>
-
-        {/* ── DUAL PRICING DISPLAY: Cash (₹) / Credits (🪙) ── */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-            flexWrap: "wrap",
-            margin: "8px 0 4px 0",
-          }}
-        >
-          <span
-            style={{
-              fontSize: "1.05rem",
-              fontWeight: 800,
-              color: "var(--text-primary, #1e293b)",
-            }}
-          >
-            ₹{book.price}
-          </span>
-
-          <span style={{ color: "#94a3b8", fontWeight: 600 }}>/</span>
-
-          <span
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "4px",
-              background: "#fef3c7",
-              color: "#b45309",
-              padding: "2px 8px",
-              borderRadius: "6px",
-              fontWeight: 700,
-              fontSize: "0.8rem",
-              border: "1px solid #fde68a",
-            }}
-            title="Lifetime purchase or rental available using Credits"
-          >
-            {/* Inline SVG Credit Coin */}
-            <svg
-              width="13"
-              height="13"
-              viewBox="0 0 24 24"
-              fill="none"
-              style={{ flexShrink: 0 }}
-            >
-              <circle cx="12" cy="12" r="10" fill="#f59e0b" />
-              <circle cx="12" cy="12" r="7.5" stroke="#ffffff" strokeWidth="1.5" fill="none" />
-              <text
-                x="12"
-                y="16"
-                textAnchor="middle"
-                fill="#ffffff"
-                fontSize="11"
-                fontWeight="900"
-                fontFamily="sans-serif"
-              >
-                C
-              </text>
-            </svg>
-            {credits} Credits
-          </span>
-        </div>
-
-        {/* Access Options Indicator */}
-        <div
-          style={{
-            fontSize: "0.72rem",
-            color: "#64748b",
-            display: "flex",
-            gap: "5px",
-            alignItems: "center",
-            marginBottom: "6px",
-          }}
-        >
-          <span>Plans:</span>
-          <span style={{ background: "#f1f5f9", padding: "1px 5px", borderRadius: "3px" }}>Day</span>
-          <span style={{ background: "#f1f5f9", padding: "1px 5px", borderRadius: "3px" }}>Week</span>
-          <span style={{ background: "#f1f5f9", padding: "1px 5px", borderRadius: "3px" }}>Year</span>
-          <span style={{ background: "#ede9fe", color: "#6d28d9", fontWeight: 600, padding: "1px 5px", borderRadius: "3px" }}>Lifetime</span>
+        <div style={{ marginTop: "auto", paddingTop: 8 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+            <div>
+              <span style={{ fontSize: "1.1rem", fontWeight: 800, color: "var(--text)" }}>₹{book.price}</span>
+              <span style={{ fontSize: "0.72rem", color: "var(--muted)", marginLeft: 4 }}>Lifetime</span>
+            </div>
+            <span style={{ fontSize: "0.75rem", color: "var(--primary)", fontWeight: 700 }}>
+              Rent from ₹{book.rentalPlans?.day?.inr || 20}
+            </span>
+          </div>
         </div>
       </div>
 
-      {actions && <div className="book-actions">{actions}</div>}
+      {/* Bottom Actions: Pure Rent/Purchase Status */}
+      <div className="book-actions">
+        {isUnlocked ? (
+          <button
+            type="button"
+            disabled
+            className="btn btn-sm"
+            style={{
+              width: "100%",
+              fontWeight: 700,
+              color: "#047857",
+              background: "#ecfdf5",
+              border: "1px solid #a7f3d0",
+              cursor: "default",
+              boxShadow: "none",
+            }}
+          >
+            ✓ Purchased / Rented
+          </button>
+        ) : (
+          actions
+        )}
+      </div>
     </div>
   );
 }

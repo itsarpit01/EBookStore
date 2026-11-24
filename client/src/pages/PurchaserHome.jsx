@@ -1,20 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import api from "../api/axios";
+import api, { SERVER_URL } from "../api/axios";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { getErrorMessage } from "../utils/errors";
 import { formatDate } from "../utils/format";
 import { getEffectiveTier } from "../utils/membershipConfig";
 import MembershipModal from "../components/MembershipModal";
-import { statusBadge } from "./PurchaserRequests";
 import { BookIcon, RequestIcon, IssueIcon } from "../components/Icons";
-
-const SERVER_URL =
-  import.meta.env.VITE_SERVER_URL ||
-  (import.meta.env.VITE_API_URL
-    ? import.meta.env.VITE_API_URL.replace(/\/api\/?$/, "")
-    : "http://localhost:5000");
 
 export default function PurchaserHome() {
   const { user } = useAuth();
@@ -24,55 +17,57 @@ export default function PurchaserHome() {
 
   const [loading, setLoading] = useState(true);
   const [latestBooks, setLatestBooks] = useState([]);
-  const [recentRequests, setRecentRequests] = useState([]);
-  const [activeIssues, setActiveIssues] = useState([]);
+  const [recentOrders, setRecentOrders] = useState([]);
+  const [activeRentals, setActiveRentals] = useState([]);
+  const [lifetimeCount, setLifetimeCount] = useState(0);
+  const [userCredits, setUserCredits] = useState(user?.credits ?? 100);
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
 
   const loadDashboard = useCallback(async () => {
     setLoading(true);
     try {
-      const [booksRes, reqRes, issueRes] = await Promise.all([
-        // Top 5 Latest Books Added
+      const [booksRes, ordersRes, shelfRes] = await Promise.all([
         api.get("/books", { params: { limit: 5, sort: "-createdAt" } }),
-        // User's Requests (sorted newest first)
         api.get("/purchase-requests/my"),
-        // User's Issues
-        api.get("/issues/my").catch(() => ({ data: [] })),
+        api.get("/books/my-digital-shelf").catch(() => ({ data: { credits: user?.credits ?? 100, digitalShelf: [] } })),
       ]);
 
       setLatestBooks(booksRes.data?.data || []);
-      const allRequests = Array.isArray(reqRes.data) ? reqRes.data : [];
-      setRecentRequests(allRequests.slice(0, 3)); // Top 3 recent
+      const allOrders = Array.isArray(ordersRes.data) ? ordersRes.data : [];
+      setRecentOrders(allOrders.slice(0, 4));
 
-      const allIssues = Array.isArray(issueRes.data) ? issueRes.data : [];
-      setActiveIssues(allIssues.filter((i) => i.status === "issued"));
+      const shelf = shelfRes.data?.digitalShelf || [];
+      if (shelfRes.data?.credits !== undefined) {
+        setUserCredits(shelfRes.data.credits);
+      }
+
+      const active = shelf.filter((item) => {
+        if (item.plan === "lifetime" || !item.expiresAt) return false;
+        return new Date(item.expiresAt) > new Date();
+      });
+      const lifetime = shelf.filter((item) => item.plan === "lifetime" || !item.expiresAt);
+
+      setActiveRentals(active);
+      setLifetimeCount(lifetime.length);
     } catch (err) {
       toast.error(getErrorMessage(err));
     } finally {
       setLoading(false);
     }
-  }, [toast]);
+  }, [user, toast]);
 
   useEffect(() => {
     loadDashboard();
   }, [loadDashboard]);
 
-  // Quota Math
-  const pendingRequestsCount = recentRequests.filter((r) =>
-    ["pending", "counter_offered"].includes(r.status)
-  ).length;
-  const totalActiveUsed = activeIssues.length + pendingRequestsCount;
-  const remainingSlots =
-    tier.maxBooks === Infinity ? Infinity : Math.max(0, tier.maxBooks - totalActiveUsed);
-
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-      {/* Welcome & Stats Header */}
+      {/* Welcome Banner */}
       <div
         className="card"
         style={{
-          background: "linear-gradient(135deg, rgba(92, 107, 192, 0.08), rgba(99, 102, 241, 0.02))",
-          border: "1px solid rgba(92, 107, 192, 0.2)",
+          background: "linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(168, 85, 247, 0.03))",
+          border: "1px solid rgba(99, 102, 241, 0.2)",
           padding: 24,
         }}
       >
@@ -81,8 +76,8 @@ export default function PurchaserHome() {
             <h2 style={{ margin: "0 0 6px 0", fontSize: "1.5rem" }}>
               Welcome back, {user?.name || "Reader"}!
             </h2>
-            <p style={{ margin: 0, color: "var(--text-secondary, #666)", fontSize: "0.95rem" }}>
-              Explore the latest library collection and track your active book requests.
+            <p style={{ margin: 0, color: "var(--muted)", fontSize: "0.95rem" }}>
+              Browse the store, rent or buy e-books, and manage your active digital passes.
             </p>
           </div>
           <button
@@ -94,18 +89,19 @@ export default function PurchaserHome() {
                   ? "linear-gradient(135deg, #f59e0b, #d97706)"
                   : tier.tier === "premium"
                   ? "linear-gradient(135deg, #6366f1, #4338ca)"
-                  : "var(--primary, #5c6bc0)",
-              color: "#fff",
+                  : "var(--surface)",
+              color: tier.tier === "free" ? "var(--text)" : "#fff",
+              border: tier.tier === "free" ? "1px solid var(--border)" : "none",
               fontWeight: 700,
               padding: "6px 14px",
               borderRadius: 20,
             }}
           >
-            {tier.name} Plan • {remainingSlots === Infinity ? "Unlimited" : `${remainingSlots} left`}
+            {tier.badge} Pass • {userCredits} Credits Available
           </button>
         </div>
 
-        {/* Quick Metric Cards */}
+        {/* Store Metrics Cards */}
         <div
           style={{
             display: "grid",
@@ -116,69 +112,80 @@ export default function PurchaserHome() {
         >
           <div
             className="card"
-            style={{ padding: 14, cursor: "pointer", background: "var(--card-bg, #fff)" }}
+            style={{ padding: 14, cursor: "pointer" }}
             onClick={() => navigate("/purchaser/my-issues")}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ color: "var(--primary, #5c6bc0)" }}><IssueIcon size={20} /></span>
-              <span style={{ fontSize: "0.85rem", color: "var(--text-secondary, #666)" }}>Active Issued</span>
+              <span style={{ color: "var(--primary)" }}><IssueIcon size={20} /></span>
+              <span style={{ fontSize: "0.82rem", color: "var(--muted)", fontWeight: 600 }}>Active Rentals</span>
             </div>
-            <strong style={{ fontSize: "1.4rem", display: "block", marginTop: 4 }}>
-              {activeIssues.length}
+            <strong style={{ fontSize: "1.5rem", display: "block", marginTop: 4 }}>
+              {activeRentals.length}
             </strong>
           </div>
 
           <div
             className="card"
-            style={{ padding: 14, cursor: "pointer", background: "var(--card-bg, #fff)" }}
+            style={{ padding: 14, cursor: "pointer" }}
+            onClick={() => navigate("/purchaser/my-issues")}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ color: "#10b981" }}><BookIcon size={20} /></span>
+              <span style={{ fontSize: "0.82rem", color: "var(--muted)", fontWeight: 600 }}>Lifetime Owned</span>
+            </div>
+            <strong style={{ fontSize: "1.5rem", display: "block", marginTop: 4 }}>
+              {lifetimeCount}
+            </strong>
+          </div>
+
+          <div
+            className="card"
+            style={{ padding: 14, cursor: "pointer" }}
             onClick={() => navigate("/purchaser/requests")}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <span style={{ color: "#f59e0b" }}><RequestIcon size={20} /></span>
-              <span style={{ fontSize: "0.85rem", color: "var(--text-secondary, #666)" }}>Pending Requests</span>
+              <span style={{ fontSize: "0.82rem", color: "var(--muted)", fontWeight: 600 }}>Total Orders</span>
             </div>
-            <strong style={{ fontSize: "1.4rem", display: "block", marginTop: 4 }}>
-              {pendingRequestsCount}
+            <strong style={{ fontSize: "1.5rem", display: "block", marginTop: 4 }}>
+              {recentOrders.length}
             </strong>
           </div>
 
           <div
             className="card"
-            style={{ padding: 14, cursor: "pointer", background: "var(--card-bg, #fff)" }}
+            style={{ padding: 14, cursor: "pointer", background: "var(--soft)" }}
             onClick={() => navigate("/purchaser/books")}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ color: "#10b981" }}><BookIcon size={20} /></span>
-              <span style={{ fontSize: "0.85rem", color: "var(--text-secondary, #666)" }}>Browse Catalog</span>
+              <span style={{ color: "var(--primary)" }}><BookIcon size={20} /></span>
+              <span style={{ fontSize: "0.82rem", color: "var(--primary)", fontWeight: 700 }}>Explore Store</span>
             </div>
-            <strong style={{ fontSize: "1.4rem", display: "block", marginTop: 4 }}>
-              Explore →
+            <strong style={{ fontSize: "1.1rem", display: "block", marginTop: 8, color: "var(--primary)" }}>
+              Browse E-Books →
             </strong>
           </div>
         </div>
       </div>
 
-      {/* Section 1: Top 5 Latest Books Added */}
+      {/* Latest Books in Store */}
       <div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
           <div>
-            <h3 style={{ margin: 0, fontSize: "1.2rem" }}>Latest Books in Library</h3>
-            <span style={{ fontSize: "0.85rem", color: "var(--text-secondary, #666)" }}>
-              Recently cataloged books ready to borrow.
+            <h3 style={{ margin: 0, fontSize: "1.2rem" }}>New Releases in Store</h3>
+            <span style={{ fontSize: "0.85rem", color: "var(--muted)" }}>
+              Recently published e-books available for rent or purchase.
             </span>
           </div>
-          <button
-            className="btn btn-soft btn-sm"
-            onClick={() => navigate("/purchaser/books")}
-          >
-            View all books →
+          <button className="btn btn-soft btn-sm" onClick={() => navigate("/purchaser/books")}>
+            Explore all books →
           </button>
         </div>
 
         {loading ? (
           <p className="empty">Loading latest arrivals...</p>
         ) : latestBooks.length === 0 ? (
-          <p className="empty">No books available yet.</p>
+          <p className="empty">No books available in the store yet.</p>
         ) : (
           <div
             style={{
@@ -187,106 +194,83 @@ export default function PurchaserHome() {
               gap: 16,
             }}
           >
-            {latestBooks.map((b) => {
-              const coverSrc = b.coverImage
-                ? b.coverImage.startsWith("http")
-                  ? b.coverImage
-                  : `${SERVER_URL}${b.coverImage.startsWith("/") ? "" : "/"}${b.coverImage}`
-                : null;
-              const isAvailable = b.availableCopies > 0;
-              return (
+            {latestBooks.map((b) => (
+              <div
+                key={b._id}
+                className="card"
+                onClick={() => navigate("/purchaser/books")}
+                style={{
+                  cursor: "pointer",
+                  padding: 14,
+                  display: "flex",
+                  flexDirection: "column",
+                  transition: "transform 0.15s ease",
+                }}
+              >
                 <div
-                  key={b._id}
-                  className="card"
-                  onClick={() => navigate("/purchaser/books")}
                   style={{
-                    cursor: "pointer",
-                    padding: 12,
+                    height: 140,
+                    borderRadius: 8,
+                    background: "var(--primary-gradient)",
                     display: "flex",
-                    flexDirection: "column",
-                    transition: "transform 0.15s ease, box-shadow 0.15s ease",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    overflow: "hidden",
+                    marginBottom: 10,
+                    color: "#fff",
+                    fontWeight: 800,
+                    fontSize: "2rem",
                   }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.transform = "translateY(-4px)";
-                    e.currentTarget.style.boxShadow = "0 6px 16px rgba(0,0,0,0.08)";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.transform = "translateY(0)";
-                    e.currentTarget.style.boxShadow = "";
-                  }}
-                  title="Click to view in Browse Books"
                 >
-                  <div
-                    style={{
-                      height: 140,
-                      borderRadius: 6,
-                      background: "rgba(0,0,0,0.04)",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      overflow: "hidden",
-                      marginBottom: 10,
-                    }}
-                  >
-                    {coverSrc ? (
-                      <img
-                        src={coverSrc}
-                        alt={b.title}
-                        style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                      />
-                    ) : (
-                      <span style={{ fontSize: "2rem", color: "var(--primary, #5c6bc0)", fontWeight: 700 }}>
-                        {b.title?.[0]?.toUpperCase()}
-                      </span>
-                    )}
-                  </div>
-                  <h4 style={{ margin: "0 0 4px 0", fontSize: "0.95rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={b.title}>
-                    {b.title}
-                  </h4>
-                  <span style={{ fontSize: "0.8rem", color: "var(--text-secondary, #666)", marginBottom: 8, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {b.author}
-                  </span>
-                  <div style={{ marginTop: "auto", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span className={`badge ${isAvailable ? "badge-success" : "badge-danger"}`} style={{ fontSize: "0.72rem" }}>
-                      {isAvailable ? `${b.availableCopies} avail` : "Out of stock"}
-                    </span>
-                    <span style={{ fontSize: "0.75rem", color: "var(--primary, #5c6bc0)", fontWeight: 600 }}>
-                      Request →
-                    </span>
-                  </div>
+                  {b.coverImage ? (
+                    <img
+                      src={`${SERVER_URL}${b.coverImage}`}
+                      alt={b.title}
+                      style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                    />
+                  ) : (
+                    b.title?.[0]?.toUpperCase()
+                  )}
                 </div>
-              );
-            })}
+                <h4 style={{ margin: "0 0 4px 0", fontSize: "0.95rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={b.title}>
+                  {b.title}
+                </h4>
+                <span style={{ fontSize: "0.8rem", color: "var(--muted)", marginBottom: 8, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  by {b.author}
+                </span>
+                <div style={{ marginTop: "auto", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontSize: "0.9rem", fontWeight: 800, color: "var(--text)" }}>₹{b.price}</span>
+                  <span style={{ fontSize: "0.74rem", color: "var(--primary)", fontWeight: 700 }}>Rent from 10 cr</span>
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </div>
 
-      {/* Section 2: Recent 3 Book Requests */}
+      {/* Recent Orders & Purchases */}
       <div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
           <div>
-            <h3 style={{ margin: 0, fontSize: "1.2rem" }}>Recent Book Requests</h3>
-            <span style={{ fontSize: "0.85rem", color: "var(--text-secondary, #666)" }}>
-              Latest requests submitted to the librarian.
+            <h3 style={{ margin: 0, fontSize: "1.2rem" }}>Recent Orders & Receipts</h3>
+            <span style={{ fontSize: "0.85rem", color: "var(--muted)" }}>
+              Your latest e-book transactions and access passes.
             </span>
           </div>
-          <button
-            className="btn btn-soft btn-sm"
-            onClick={() => navigate("/purchaser/requests")}
-          >
-            View all requests →
+          <button className="btn btn-soft btn-sm" onClick={() => navigate("/purchaser/requests")}>
+            View all orders →
           </button>
         </div>
 
         {loading ? (
-          <p className="empty">Loading requests...</p>
-        ) : recentRequests.length === 0 ? (
+          <p className="empty">Loading orders...</p>
+        ) : recentOrders.length === 0 ? (
           <div className="card" style={{ padding: 24, textAlign: "center" }}>
-            <p style={{ margin: "0 0 12px 0", color: "var(--text-secondary, #666)" }}>
-              You haven&apos;t requested any books yet.
+            <p style={{ margin: "0 0 12px 0", color: "var(--muted)" }}>
+              You haven&apos;t rented or purchased any books yet.
             </p>
             <button className="btn btn-sm" onClick={() => navigate("/purchaser/books")}>
-              Browse Books to Request
+              Browse Store to Rent or Buy
             </button>
           </div>
         ) : (
@@ -294,34 +278,27 @@ export default function PurchaserHome() {
             <table>
               <thead>
                 <tr>
-                  <th>Book Title</th>
-                  <th>Requested Date</th>
-                  <th>Needed Until</th>
+                  <th>E-Book Title</th>
+                  <th>Order Date</th>
+                  <th>Plan & Payment</th>
                   <th>Status</th>
-                  <th></th>
                 </tr>
               </thead>
               <tbody>
-                {recentRequests.map((r) => (
-                  <tr
-                    key={r._id}
-                    onClick={() => navigate("/purchaser/requests")}
-                    style={{ cursor: "pointer" }}
-                    title="Click to view details in My Requests"
-                  >
+                {recentOrders.map((r) => (
+                  <tr key={r._id}>
                     <td>
                       <strong>{r.title}</strong>
-                      <span className="cell-sub" style={{ display: "inline-block", marginLeft: 6 }}>
-                        by {r.author}
+                      <span className="cell-sub">{r.author}</span>
+                    </td>
+                    <td>{formatDate(r.createdAt)}</td>
+                    <td>
+                      <span className="badge" style={{ background: "var(--soft)", color: "var(--primary)" }}>
+                        {r.reason || "Digital Access"}
                       </span>
                     </td>
-                    <td style={{ whiteSpace: "nowrap" }}>{formatDate(r.createdAt)}</td>
-                    <td style={{ whiteSpace: "nowrap" }}>{formatDate(r.neededUntil)}</td>
-                    <td>{statusBadge(r.status)}</td>
-                    <td style={{ textAlign: "right" }}>
-                      <span style={{ color: "var(--primary, #5c6bc0)", fontSize: "0.85rem", fontWeight: 600 }}>
-                        Details →
-                      </span>
+                    <td>
+                      <span className="badge badge-success">Completed</span>
                     </td>
                   </tr>
                 ))}

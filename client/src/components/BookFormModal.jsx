@@ -1,17 +1,11 @@
 import { useState } from "react";
-import api from "../api/axios";
+import api, { SERVER_URL } from "../api/axios";
 import Modal from "./Modal";
 import DropZone from "./DropZone";
 import ImageCropModal from "./ImageCropModal";
 import { useToast } from "../context/ToastContext";
 import { bookFormSchema } from "../schemas/bookSchema";
 import { getErrorMessage, getFieldErrors } from "../utils/errors";
-
-const SERVER_URL =
-  import.meta.env.VITE_SERVER_URL ||
-  (import.meta.env.VITE_API_URL
-    ? import.meta.env.VITE_API_URL.replace(/\/api\/?$/, "")
-    : "http://localhost:5000");
 
 const PRESET_CATEGORIES = [
   "Programming & Tech",
@@ -140,15 +134,18 @@ export default function BookFormModal({ book, onClose, onSaved }) {
     const payload = { ...parsed.data };
     if (!payload.category) delete payload.category;
 
-    const fd = new FormData();
-    Object.entries(payload).forEach(([key, val]) => fd.append(key, val));
-    
-    // Explicitly append creditPrice if set
-    if (form.creditPrice) {
-      fd.append("creditPrice", form.creditPrice);
-    } else if (form.price) {
-      fd.append("creditPrice", Math.max(1, Math.round(Number(form.price) / 10)));
+    // Ensure creditPrice is present
+    if (!payload.creditPrice && form.price) {
+      payload.creditPrice = Math.max(1, Math.round(Number(form.price) / 10));
     }
+
+    // Single-pass FormData append (Duplicate key bug fixed)
+    const fd = new FormData();
+    Object.entries(payload).forEach(([key, val]) => {
+      if (val !== undefined && val !== null) {
+        fd.append(key, val);
+      }
+    });
 
     if (coverFile) fd.append("coverImage", coverFile);
 
@@ -275,6 +272,7 @@ export default function BookFormModal({ book, onClose, onSaved }) {
                 placeholder="50"
               />
               <span className="hint" style={{ fontSize: "0.68rem" }}>₹10 = 1C (editable)</span>
+              {errors.creditPrice && <span className="error-text">{errors.creditPrice}</span>}
             </div>
 
             <div className="field">

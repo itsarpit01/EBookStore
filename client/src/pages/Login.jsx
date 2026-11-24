@@ -65,7 +65,7 @@ export default function Login() {
     <AuthLayout>
       <form onSubmit={handleSubmit} noValidate>
         <h2>Welcome back</h2>
-        <p className="sub">Login to continue to LibraryHub.</p>
+        <p className="sub">Login to continue to ReadHub E-Books.</p>
 
         {error && <div className="alert-error">{error}</div>}
 
@@ -99,7 +99,7 @@ export default function Login() {
         </p>
 
         <button className="btn btn-block" type="submit" disabled={loading}>
-          {loading ? "Logging in..." : "Login"}
+          {loading ? "Logging in..." : "Login to ReadHub"}
         </button>
 
         <div style={{ display: "flex", alignItems: "center", margin: "18px 0", gap: 10 }}>
@@ -138,7 +138,7 @@ export default function Login() {
         </button>
 
         <p className="switch">
-          New here? <Link to="/register">Create account</Link>
+          New to ReadHub? <Link to="/register">Create an account</Link>
         </p>
       </form>
     </AuthLayout>

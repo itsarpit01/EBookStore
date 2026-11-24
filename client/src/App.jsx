@@ -7,17 +7,25 @@ import Register from "./pages/Register";
 import ForgotPassword from "./pages/ForgotPassword";
 import DeleteAccountConfirm from "./pages/DeleteAccountConfirm";
 import Profile from "./pages/Profile";
+
+// Admin / Librarian Pages
 import LibrarianHome from "./pages/LibrarianHome";
 import LibrarianBooks from "./pages/LibrarianBooks";
 import LibrarianIssues from "./pages/LibrarianIssues";
 import LibrarianRequests from "./pages/LibrarianRequests";
 import LibrarianUsers from "./pages/LibrarianUsers";
 import LibrarianSupport from "./pages/LibrarianSupport";
+
+// Reader / Purchaser Pages
 import PurchaserHome from "./pages/PurchaserHome";
 import PurchaserBooks from "./pages/PurchaserBooks";
 import PurchaserIssues from "./pages/PurchaserIssues";
 import PurchaserRequests from "./pages/PurchaserRequests";
 import PurchaserSupport from "./pages/PurchaserSupport";
+import Wishlist from "./pages/Wishlist";
+
+// Dedicated In-Browser Book Reader
+import BookReader from "./pages/BookReader";
 
 function RootRedirect() {
   const { isAuthenticated, user, loading } = useAuth();
@@ -40,7 +48,12 @@ export default function App() {
       <Route path="/forgot-password" element={<ForgotPassword />} />
       <Route path="/delete-account-confirm" element={<DeleteAccountConfirm />} />
 
-      {/* Librarian group */}
+      {/* Dedicated In-Browser Book Reader (Protected) */}
+      <Route element={<ProtectedRoute roles={["purchaser", "librarian"]} />}>
+        <Route path="/read/:id" element={<BookReader />} />
+      </Route>
+
+      {/* Admin / Librarian Group */}
       <Route element={<ProtectedRoute roles={["librarian"]} />}>
         <Route path="/librarian" element={<AppLayout />}>
           <Route index element={<LibrarianHome />} />
@@ -53,14 +66,15 @@ export default function App() {
         </Route>
       </Route>
 
-      {/* Purchaser group */}
+      {/* Reader / Purchaser Group */}
       <Route element={<ProtectedRoute roles={["purchaser"]} />}>
         <Route path="/purchaser" element={<AppLayout />}>
           <Route index element={<PurchaserHome />} />
           <Route path="books" element={<PurchaserBooks />} />
           <Route path="my-issues" element={<PurchaserIssues />} />
+          <Route path="wishlist" element={<Wishlist />} />
           <Route path="requests" element={<PurchaserRequests />} />
-             <Route path="support" element={<PurchaserSupport />} />
+          <Route path="support" element={<PurchaserSupport />} />
           <Route path="profile" element={<Profile />} />
         </Route>
       </Route>
