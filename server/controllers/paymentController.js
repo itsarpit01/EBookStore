@@ -122,9 +122,14 @@ export const verifyPayment = async (req, res) => {
       { upsert: true }
     );
 
+     const bonusCredits = tier === "ultimate" ? 400 : 200;
+
     const updatedUser = await User.findByIdAndUpdate(
       userId,
-      { membership: { tier, startedAt: startDate, expiresAt: endDate } },
+      {
+        $inc: { credits: bonusCredits },
+        membership: { tier, startedAt: startDate, expiresAt: endDate },
+      },
       { new: true }
     ).select("-password");
 

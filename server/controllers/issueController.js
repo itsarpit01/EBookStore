@@ -2,364 +2,122 @@ import Issue from "../models/Issue.js";
 import Book from "../models/Book.js";
 import User from "../models/User.js";
 import PurchaseRequest from "../models/PurchaseRequest.js";
-import Notification from "../models/Notification.js";
-import { calcFine, withOverdueInfo } from "../utils/fine.js";
-import { createIssue, reissueIssue, populateIssue } from "../services/issueService.js";
-import { MAX_REISSUES } from "../utils/dates.js";
-import { sendNotification, notifyLibrarians } from "./notificationController.js";
+import { getEffectiveTier } from "../utils/membershipConfig.js";
 
-const formatDateStr = (date) =>
-  date
-    ? new Date(date).toLocaleDateString("en-IN", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-      })
-    : "";
+/**
+ * GET /api/issues
+ * Librarian: Fetch all reading passes / rental issues
+ */
+export const getIssues = async (req, res) => {
+  try {
+    const { status, member, search } = req.query;
+    const filter = {};
 
-// ══════════════════════════════════════════════════════════════════════════
-// POST /api/issues (Librarian clicks "Confirm & Issue book")
-// ══════════════════════════════════════════════════════════════════════════
-export const issueBook = async (req, res) => {
-  const { bookId, memberId, dueDate, requestId } = req.body;
-
-  // 1. Check associated purchase request
-  let requestDoc = null;
-  if (requestId) {
-    requestDoc = await PurchaseRequest.findById(requestId);
-  } else {
-    requestDoc = await PurchaseRequest.findOne({
-      requestedBy: memberId,
-      book: bookId,
-      status: "approved",
-      issue: { $exists: false },
-    });
-  }
-
-  const isDigital = requestDoc?.accessMode === "digital" || Boolean(requestDoc?.digitalPlan);
-  const digitalPlan = isDigital ? requestDoc.digitalPlan : null;
-  const paymentMode = isDigital ? requestDoc.paymentMode : null;
-
-  // 2. Create the official Issue record
-  const issue = await createIssue({ bookId, memberId, dueDate, issuedBy: req.user.id });
-
-  // 3. Agar digital access hai:
-  if (isDigital) {
-    await Issue.findByIdAndUpdate(issue._id, {
-      accessMode: "digital",
-      digitalPlan,
-      paymentMode,
-    });
-
-    // Digital copies physical library copies ko decrement nahi karti
-    await Book.findByIdAndUpdate(bookId, { $inc: { availableCopies: 1 } });
-
-    // DEDUCT CREDITS & ACTIVATE DIGITAL SHELF UPON ISSUE CONFIRMATION
-    if (paymentMode === "credits" && !requestDoc?.creditsDeducted) {
-      const userDoc = await User.findById(memberId);
-      if (userDoc) {
-        let cost = requestDoc?.creditCost || 0;
-        if (!cost || cost <= 0) {
-          const plan = digitalPlan || "week";
-          if (plan === "day") cost = 10;
-          else if (plan === "week") cost = 50;
-          else if (plan === "year") cost = 70;
-          else cost = 150;
-        }
-
-        // Deduct credits from wallet
-        userDoc.credits = Math.max(0, (userDoc.credits ?? 100) - cost);
-
-        // Add book to digital shelf
-        userDoc.digitalShelf = userDoc.digitalShelf || [];
-        let expiresAt = new Date(dueDate);
-        if (digitalPlan === "lifetime") expiresAt = null;
-
-        const shelfIdx = userDoc.digitalShelf.findIndex((item) => String(item.book) === String(bookId));
-        const shelfItem = {
-          book: bookId,
-          plan: digitalPlan || "week",
-          paymentMode: "credits",
-          amountPaid: cost,
-          acquiredAt: new Date(),
-          expiresAt,
-        };
-
-        if (shelfIdx > -1) {
-          userDoc.digitalShelf[shelfIdx] = shelfItem;
-        } else {
-          userDoc.digitalShelf.push(shelfItem);
-        }
-
-        await userDoc.save();
-
-        if (requestDoc) {
-          requestDoc.creditsDeducted = true;
-          requestDoc.creditCost = cost;
-        }
-      }
+    if (status) {
+      filter.status = status;
     }
+    if (member) {
+      filter.member = member;
+    }
+
+    const issues = await Issue.find(filter)
+      .populate("book", "title author coverImage")
+      .populate("member", "name email membership")
+      .sort({ createdAt: -1 });
+
+    let result = issues;
+    if (search) {
+      const q = search.toLowerCase();
+      result = result.filter(
+        (i) =>
+          i.book?.title?.toLowerCase().includes(q) ||
+          i.book?.author?.toLowerCase().includes(q) ||
+          i.member?.name?.toLowerCase().includes(q) ||
+          i.member?.email?.toLowerCase().includes(q)
+      );
+    }
+
+    res.json(result);
+  } catch (err) {
+    console.error("getIssues error:", err);
+    res.status(500).json({ message: "Failed to fetch active reader sessions" });
   }
-
-  // 4. Link issue to purchase request
-  if (requestDoc) {
-    requestDoc.issue = issue._id;
-    requestDoc.status = "approved";
-    await requestDoc.save();
-  }
-
-  const populated = await populateIssue(Issue.findById(issue._id));
-
-  // Notification
-  sendNotification({
-    userId: memberId,
-    title: isDigital ? "Digital Book Issued" : "Book Issued",
-    message: isDigital
-      ? `"${populated.book?.title || 'Book'}" digital access is confirmed. Book is now active under My Library.`
-      : `"${populated.book?.title || 'Book'}" has been issued to you. Due date: ${formatDateStr(dueDate)}.`,
-    type: "success",
-    link: "/purchaser/my-issues",
-  });
-
-  res.status(201).json(withOverdueInfo(populated));
 };
 
-// PATCH /api/issues/:id/request-reissue (purchaser) body: { dueDate }
-export const requestReissue = async (req, res) => {
-  const { dueDate } = req.body;
-  const issue = await Issue.findOne({ _id: req.params.id, member: req.user.id });
+/**
+ * GET /api/issues/my
+ * Reader: Fetch their own rental passes & purchased books
+ */
+export const getMyIssues = async (req, res) => {
+  try {
+    const issues = await Issue.find({ member: req.user._id })
+      .populate("book", "title author coverImage rentalPlans")
+      .sort({ createdAt: -1 });
 
-  if (!issue) return res.status(404).json({ message: "Issue record not found" });
-  if (issue.status !== "issued") {
-    return res.status(400).json({ message: "Only currently active rentals can be reissued" });
+    res.json(issues);
+  } catch (err) {
+    console.error("getMyIssues error:", err);
+    res.status(500).json({ message: "Failed to fetch your library books" });
   }
-  if ((issue.reissueCount || 0) >= MAX_REISSUES) {
-    return res.status(400).json({ message: `Maximum reissue limit (${MAX_REISSUES}) reached` });
-  }
-
-  issue.reissueRequested = true;
-  issue.reissueRequestedDate = new Date(dueDate);
-  await issue.save();
-
-  const populated = await populateIssue(Issue.findById(issue._id));
-  const memberName = populated.member?.name || "A member";
-
-  notifyLibrarians({
-    title: "New Extension Request",
-    message: `${memberName} requested rental extension for "${populated.book?.title || 'Book'}" until ${formatDateStr(dueDate)}.`,
-    type: "warning",
-    link: "/librarian/requests",
-  });
-
-  res.json(withOverdueInfo(populated));
 };
 
-// PATCH /api/issues/:id/cancel-reissue (purchaser)
-export const cancelReissue = async (req, res) => {
-  const issue = await Issue.findOne({ _id: req.params.id, member: req.user.id });
-
-  if (!issue) return res.status(404).json({ message: "Issue record not found" });
-  if (!issue.reissueRequested) {
-    return res.status(400).json({ message: "No pending extension request found for this book" });
-  }
-
-  issue.reissueRequested = false;
-  issue.reissueRequestedDate = null;
-  await issue.save();
-
-  await Notification.deleteMany({
-    title: "New Extension Request",
-    link: "/librarian/requests",
-  });
-
-  const populated = await populateIssue(Issue.findById(issue._id));
-  res.json(withOverdueInfo(populated));
-};
-
-// PATCH /api/issues/:id/reissue (librarian) body: { dueDate }
-export const reissue = async (req, res) => {
-  const issue = await reissueIssue({ issueId: req.params.id, dueDate: req.body.dueDate });
-
-  await Issue.findByIdAndUpdate(req.params.id, {
-    reissueRequested: false,
-    reissueRequestedDate: null,
-  });
-
-  const populated = await populateIssue(Issue.findById(issue._id));
-
-  sendNotification({
-    userId: populated.member?._id || populated.member,
-    title: "Extension Approved",
-    message: `Your rental extension for "${populated.book?.title || 'Book'}" was approved. Extended until: ${formatDateStr(req.body.dueDate)}.`,
-    type: "success",
-    link: "/purchaser/my-issues",
-  });
-
-  await Notification.deleteMany({
-    title: "New Extension Request",
-    link: "/librarian/requests",
-  });
-
-  res.json(withOverdueInfo(issue));
-};
-
-// PATCH /api/issues/:id/reject-reissue (librarian)
-export const rejectReissue = async (req, res) => {
-  const issue = await Issue.findById(req.params.id);
-  if (!issue) return res.status(404).json({ message: "Issue record not found" });
-  if (!issue.reissueRequested) {
-    return res.status(400).json({ message: "No pending extension request to reject" });
-  }
-
-  issue.reissueRequested = false;
-  issue.reissueRequestedDate = null;
-  await issue.save();
-
-  const populated = await populateIssue(Issue.findById(issue._id));
-
-  sendNotification({
-    userId: populated.member?._id || populated.member,
-    title: "Extension Rejected",
-    message: `Your extension request for "${populated.book?.title || 'Book'}" was rejected.`,
-    type: "danger",
-    link: "/purchaser/my-issues",
-  });
-
-  await Notification.deleteMany({
-    title: "New Extension Request",
-    link: "/librarian/requests",
-  });
-
-  res.json(withOverdueInfo(populated));
-};
-
-// PATCH /api/issues/:id/return (librarian or purchaser)
+/**
+ * POST /api/issues/:id/return
+ * Reader / Librarian: Return a rented e-book early
+ * Reward: Gives +5 Bonus Reading Credits for returning before due date!
+ */
 export const returnBook = async (req, res) => {
-  const query = { _id: req.params.id };
-  if (req.user?.role === "purchaser") {
-    query.member = req.user.id;
-  }
-  const issue = await Issue.findOne(query);
-  if (!issue) return res.status(404).json({ message: "Issue record not found" });
-  if (issue.status === "returned") {
-    return res.status(400).json({ message: "Rental already returned / closed" });
-  }
+  try {
+    const issue = await Issue.findById(req.params.id);
+    if (!issue) {
+      return res.status(404).json({ message: "Reading record not found" });
+    }
 
-  // Lifetime purchases cannot be returned
-  if (issue.digitalPlan === "lifetime") {
-    return res.status(400).json({ message: "Lifetime purchases cannot be returned." });
-  }
+    // Authorization: Member themselves or a librarian
+    if (
+      req.user.role !== "librarian" &&
+      issue.member.toString() !== req.user._id.toString()
+    ) {
+      return res.status(403).json({ message: "Not authorized to return this book" });
+    }
 
-  const now = new Date();
-  const fineAmount = issue.accessMode === "digital" ? 0 : calcFine(issue.dueDate, now);
+    if (issue.status === "returned") {
+      return res.status(400).json({ message: "Book has already been returned" });
+    }
 
-  const updated = await Issue.findOneAndUpdate(
-    { _id: issue._id, status: "issued" },
-    {
-      status: "returned",
-      returnDate: now,
-      fine: fineAmount,
-      reissueRequested: false,
-      reissueRequestedDate: null,
-    },
-    { new: true }
-  );
-  if (!updated) return res.status(400).json({ message: "Rental already returned / closed" });
+    const now = new Date();
+    const isEarlyReturn = now.getTime() < new Date(issue.dueDate).getTime();
 
-  // 1. Digital lease early return: Expire digital shelf entry immediately to release rental quota
-  if (issue.accessMode === "digital") {
+    issue.status = "returned";
+    issue.returnedAt = now;
+    await issue.save();
+
+    // Expire access immediately from user's active digitalShelf
     await User.updateOne(
       { _id: issue.member, "digitalShelf.book": issue.book },
       { $set: { "digitalShelf.$.expiresAt": now } }
     );
-  }
 
-  // 2. Synchronize PurchaseRequest / Order record status to "returned"
-  await PurchaseRequest.updateMany(
-    { issue: issue._id },
-    { $set: { status: "returned" } }
-  ).catch(() => {});
+    // Give +5 Reading Credits Cashback if returned early!
+    if (isEarlyReturn) {
+      await User.findByIdAndUpdate(issue.member, { $inc: { credits: 5 } });
+    }
 
-  // Physical library copy increment
-  if (issue.accessMode !== "digital") {
-    await Book.findByIdAndUpdate(issue.book, { $inc: { availableCopies: 1 } });
-  }
+    // Sync status with PurchaseRequest record
+    await PurchaseRequest.updateMany(
+      { book: issue.book, user: issue.member, status: "approved" },
+      { $set: { status: "returned" } }
+    );
 
-  try {
-    await Notification.deleteMany({
-      $or: [
-        { link: `/issues?id=${issue._id}` },
-        { link: `/requests?issueId=${issue._id}` },
-      ],
+    res.json({
+      message: isEarlyReturn
+        ? "Book returned early! +5 Reading Credits bonus added to your account."
+        : "Book returned successfully.",
+      creditsAwarded: isEarlyReturn ? 5 : 0,
+      issue,
     });
-  } catch (notifErr) {}
-
-  // On-time return reward (+10 bonus credits) for physical returns
-  let rewardGranted = false;
-  const isOnTime =
-    issue.accessMode !== "digital" &&
-    fineAmount === 0 &&
-    now.getTime() <= new Date(issue.dueDate).getTime();
-
-  if (isOnTime) {
-    try {
-      const userDoc = await User.findById(issue.member);
-      if (userDoc) {
-        if (userDoc.credits === undefined || userDoc.credits === null) {
-          userDoc.credits = 100;
-        }
-        userDoc.credits += 10;
-        await userDoc.save();
-        rewardGranted = true;
-
-        const bookDoc = await Book.findById(issue.book);
-        const bookTitle = bookDoc?.title || "your book";
-
-        sendNotification({
-          userId: issue.member,
-          title: "Bonus Credits Rewarded",
-          message: `Great job returning "${bookTitle}" on time. +10 Bonus Credits added to your balance.`,
-          type: "success",
-          link: "/purchaser/books",
-        });
-      }
-    } catch (rewardErr) {
-      console.error("[Reward Error]:", rewardErr.message);
-    }
+  } catch (err) {
+    console.error("returnBook error:", err);
+    res.status(500).json({ message: "Failed to return book" });
   }
-
-  const populated = await populateIssue(Issue.findById(updated._id));
-  res.json({
-    ...withOverdueInfo(populated),
-    rewardGranted,
-    creditsEarned: rewardGranted ? 10 : 0,
-  });
-};
-
-// GET /api/issues
-export const getIssues = async (req, res) => {
-  const { status, reissueRequested } = req.query;
-  const filter = {};
-
-  if (status === "reissue_requested" || reissueRequested === "true") {
-    filter.status = "issued";
-    filter.reissueRequested = true;
-  } else {
-    if (status === "issued" || status === "returned") filter.status = status;
-    if (status === "overdue") {
-      filter.status = "issued";
-      filter.dueDate = { $lt: new Date() };
-    }
-  }
-
-  const issues = await populateIssue(Issue.find(filter).sort({ createdAt: -1 }));
-  res.json(issues.map(withOverdueInfo));
-};
-
-// GET /api/issues/my
-export const getMyIssues = async (req, res) => {
-  const issues = await populateIssue(
-    Issue.find({ member: req.user.id }).sort({ createdAt: -1 })
-  );
-  res.json(issues.map(withOverdueInfo));
 };
