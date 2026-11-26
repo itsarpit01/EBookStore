@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-const SERVER_URL = "http://localhost:5001";
+import { SERVER_URL } from "../api/axios";
 
 export default function BookCard({ book, actions, isUnlocked = false }) {
   const [inWishlist, setInWishlist] = useState(false);

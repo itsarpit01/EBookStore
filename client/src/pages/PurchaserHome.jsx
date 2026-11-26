@@ -238,10 +238,15 @@ export default function PurchaserHome() {
                 <span style={{ fontSize: "0.8rem", color: "var(--muted)", marginBottom: 8, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                   by {b.author}
                 </span>
-                <div style={{ marginTop: "auto", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ fontSize: "0.9rem", fontWeight: 800, color: "var(--text)" }}>₹{b.price}</span>
-                  <span style={{ fontSize: "0.74rem", color: "var(--primary)", fontWeight: 700 }}>Rent from 10 cr</span>
-                </div>
+               <div style={{ marginTop: "auto", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+  <div>
+    <span style={{ fontSize: "0.9rem", fontWeight: 800, color: "var(--text)" }}>₹{b.price}</span>
+    <span style={{ fontSize: "0.72rem", color: "var(--muted)", marginLeft: 4 }}>Lifetime</span>
+  </div>
+  <span style={{ fontSize: "0.74rem", color: "var(--primary)", fontWeight: 700 }}>
+    Rent from ₹{b.rentalPlans?.day?.inr || 20}
+  </span>
+</div>
               </div>
             ))}
           </div>
