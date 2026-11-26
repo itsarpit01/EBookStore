@@ -21,7 +21,7 @@ const transactionSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ["membership", "fine"],
+      enum: ["membership", "fine","book_access"],
       default: "membership",
       index: true,
     },

@@ -17,7 +17,7 @@ export default function RequestFormModal({ initial = {}, onClose, onSaved }) {
   const [userCredits, setUserCredits] = useState(user?.credits ?? 100);
   const [alreadyOwnedInfo, setAlreadyOwnedInfo] = useState(null);
   const [selectedPlan, setSelectedPlan] = useState("week");
-  const [paymentMode, setPaymentMode] = useState("credits");
+  const [paymentMode, setPaymentMode] = useState("razorpay"); // Default to Razorpay
   const [processing, setProcessing] = useState(false);
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [error, setError] = useState("");
@@ -73,10 +73,21 @@ export default function RequestFormModal({ initial = {}, onClose, onSaved }) {
   ];
 
   const currentPlan = plans.find((p) => p.id === selectedPlan) || plans[1];
-  const requiredAmount = paymentMode === "credits" ? `${currentPlan.credits} Credits` : `₹${currentPlan.inr}`;
   const hasEnoughCredits = userCredits >= currentPlan.credits;
 
-  const handleInstantUnlock = async () => {
+  // Helper to load Razorpay script on-the-fly
+  const ensureRazorpayLoaded = async () => {
+    if (window.Razorpay) return true;
+    return new Promise((resolve) => {
+      const script = document.createElement("script");
+      script.src = "https://checkout.razorpay.com/v1/checkout.js";
+      script.onload = () => resolve(true);
+      script.onerror = () => resolve(false);
+      document.body.appendChild(script);
+    });
+  };
+
+  const handleCheckout = async () => {
     setError("");
 
     if (alreadyOwnedInfo) {
@@ -88,24 +99,104 @@ export default function RequestFormModal({ initial = {}, onClose, onSaved }) {
       return;
     }
 
-    if (paymentMode === "credits" && !hasEnoughCredits) {
-      setError(`Insufficient credits. You need ${currentPlan.credits} credits, but have ${userCredits}.`);
+    // ───────────────────────────────────────────
+    // OPTION 1: PAY WITH CREDITS (Instant Deduct)
+    // ───────────────────────────────────────────
+    if (paymentMode === "credits") {
+      if (!hasEnoughCredits) {
+        setError(`Insufficient credits. You need ${currentPlan.credits} credits, but have ${userCredits}.`);
+        return;
+      }
+
+      setProcessing(true);
+      try {
+        await api.post(`/books/${bookId}/digital-access`, {
+          plan: selectedPlan,
+          paymentMode: "credits",
+        });
+
+        toast.success(`"${book?.title || 'Book'}" unlocked with ${currentPlan.credits} credits!`);
+        window.dispatchEvent(new Event("quota-updated"));
+        if (onSaved) onSaved();
+        onClose();
+      } catch (err) {
+        setError(getErrorMessage(err, "Failed to complete transaction"));
+      } finally {
+        setProcessing(false);
+      }
+      return;
+    }
+
+    // ───────────────────────────────────────────
+    // OPTION 2: PAY WITH RAZORPAY (Card / UPI)
+    // ───────────────────────────────────────────
+    const sdkLoaded = await ensureRazorpayLoaded();
+    if (!sdkLoaded || !window.Razorpay) {
+      setError("Razorpay SDK failed to load. Please check your internet connection.");
       return;
     }
 
     setProcessing(true);
     try {
-      await api.post(`/books/${bookId}/digital-access`, {
+      // 1. Create order on backend
+      const res = await api.post("/payment/create-book-order", {
+        bookId,
         plan: selectedPlan,
-        paymentMode,
       });
 
-      toast.success("E-Book added to your My Library!");
-      if (onSaved) onSaved();
-      onClose();
+      const { orderId, amount, currency, keyId } = res.data;
+
+      // 2. Open Razorpay Checkout modal
+      const options = {
+        key: keyId || import.meta.env.VITE_RAZORPAY_KEY_ID,
+        amount,
+        currency: currency || "INR",
+        name: "ReadHub E-Book Store",
+        description: `${currentPlan.title} • ${book?.title || "E-Book"}`,
+        order_id: orderId,
+        prefill: {
+          name: user?.name || "",
+          email: user?.email || "",
+        },
+        theme: {
+          color: "#2D1B69",
+        },
+        modal: {
+          ondismiss: () => {
+            setProcessing(false);
+          },
+        },
+        handler: async function (response) {
+          try {
+            // 3. Verify signature on backend
+            await api.post("/payment/verify-book-order", {
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature: response.razorpay_signature,
+              bookId,
+              plan: selectedPlan,
+            });
+
+            toast.success(`Payment verified! "${book?.title || 'Book'}" added to your My Library!`);
+            window.dispatchEvent(new Event("quota-updated"));
+            if (onSaved) onSaved();
+            onClose();
+          } catch (verifyErr) {
+            setError(getErrorMessage(verifyErr, "Payment verification failed"));
+          } finally {
+            setProcessing(false);
+          }
+        },
+      };
+
+      const rzp = new window.Razorpay(options);
+      rzp.on("payment.failed", function (resp) {
+        setError(resp.error?.description || "Payment failed. Please try again.");
+        setProcessing(false);
+      });
+      rzp.open();
     } catch (err) {
-      setError(getErrorMessage(err, "Failed to complete transaction"));
-    } finally {
+      setError(getErrorMessage(err, "Failed to initiate Razorpay checkout"));
       setProcessing(false);
     }
   };
@@ -132,7 +223,7 @@ export default function RequestFormModal({ initial = {}, onClose, onSaved }) {
                   fontSize: "0.88rem",
                 }}
               >
-                ✓ You already own or have an active rental for this e-book. You cannot purchase it twice.
+                ✓ You already have active access to this e-book. You cannot purchase or rent it twice.
               </div>
             )}
 
@@ -169,15 +260,12 @@ export default function RequestFormModal({ initial = {}, onClose, onSaved }) {
                       style={{ width: "100%", height: "100%", objectFit: "cover" }}
                     />
                   ) : (
-                    book.title.charAt(0)
+                    book.title?.charAt(0).toUpperCase()
                   )}
                 </div>
                 <div>
-                  <h4 style={{ margin: 0, fontSize: "1rem", fontWeight: 700 }}>{book.title}</h4>
-                  <div style={{ fontSize: "0.82rem", color: "var(--muted)" }}>by {book.author}</div>
-                  <span className="badge badge-success" style={{ marginTop: 4 }}>
-                    Digital Access
-                  </span>
+                  <h4 style={{ margin: "0 0 2px 0", fontSize: "1rem" }}>{book.title}</h4>
+                  <span style={{ fontSize: "0.82rem", color: "var(--muted)" }}>by {book.author}</span>
                 </div>
               </div>
             )}
@@ -185,7 +273,7 @@ export default function RequestFormModal({ initial = {}, onClose, onSaved }) {
             {/* Step 1: Select Plan */}
             <div style={{ opacity: alreadyOwnedInfo ? 0.5 : 1, pointerEvents: alreadyOwnedInfo ? "none" : "auto" }}>
               <label style={{ fontSize: "0.88rem", fontWeight: 700, marginBottom: 8, display: "block" }}>
-                1. Select Rental or Buy Option
+                1. Select Digital Access Plan
               </label>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                 {plans.map((p) => {
@@ -195,7 +283,7 @@ export default function RequestFormModal({ initial = {}, onClose, onSaved }) {
                       key={p.id}
                       onClick={() => setSelectedPlan(p.id)}
                       style={{
-                        padding: "12px 14px",
+                        padding: "12px",
                         borderRadius: "12px",
                         border: isSelected ? "2px solid var(--primary)" : "1px solid var(--border)",
                         background: isSelected ? "var(--soft)" : "var(--surface)",
@@ -225,7 +313,7 @@ export default function RequestFormModal({ initial = {}, onClose, onSaved }) {
                       <div style={{ fontSize: "0.9rem", fontWeight: 800, color: "var(--text)" }}>{p.title}</div>
                       <div style={{ fontSize: "0.74rem", color: "var(--muted)", margin: "2px 0 6px" }}>{p.duration}</div>
                       <div style={{ fontSize: "0.86rem", fontWeight: 800, color: "var(--primary)" }}>
-                        {p.credits} Credits <span style={{ fontSize: "0.74rem", color: "var(--muted)" }}>(or ₹{p.inr})</span>
+                        ₹{p.inr} <span style={{ fontSize: "0.74rem", color: "var(--muted)" }}>({p.credits} Credits)</span>
                       </div>
                     </div>
                   );
@@ -239,6 +327,29 @@ export default function RequestFormModal({ initial = {}, onClose, onSaved }) {
                 2. Select Payment Method
               </label>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                {/* Razorpay Online Option */}
+                <div
+                  onClick={() => setPaymentMode("razorpay")}
+                  style={{
+                    padding: "12px 14px",
+                    borderRadius: "12px",
+                    border: paymentMode === "razorpay" ? "2px solid var(--primary)" : "1px solid var(--border)",
+                    background: paymentMode === "razorpay" ? "var(--soft)" : "var(--surface)",
+                    cursor: "pointer",
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ fontWeight: 800, fontSize: "0.88rem" }}>Pay Online / UPI</span>
+                    <span style={{ fontSize: "0.68rem", fontWeight: 700, background: "#2D1B69", color: "#C8FF3D", padding: "1px 6px", borderRadius: 4 }}>
+                      Razorpay
+                    </span>
+                  </div>
+                  <div style={{ fontSize: "0.76rem", color: "var(--muted)", marginTop: 4 }}>
+                    Amount: <strong>₹{currentPlan.inr}</strong> (UPI, Cards, NetBanking)
+                  </div>
+                </div>
+
+                {/* Credits Option */}
                 <div
                   onClick={() => setPaymentMode("credits")}
                   style={{
@@ -250,24 +361,8 @@ export default function RequestFormModal({ initial = {}, onClose, onSaved }) {
                   }}
                 >
                   <div style={{ fontWeight: 800, fontSize: "0.88rem" }}>Pay with Credits</div>
-                  <div style={{ fontSize: "0.76rem", color: "var(--muted)", marginTop: 2 }}>
-                    Your Balance: <strong>{userCredits} Credits</strong>
-                  </div>
-                </div>
-
-                <div
-                  onClick={() => setPaymentMode("cash")}
-                  style={{
-                    padding: "12px 14px",
-                    borderRadius: "12px",
-                    border: paymentMode === "cash" ? "2px solid var(--primary)" : "1px solid var(--border)",
-                    background: paymentMode === "cash" ? "var(--soft)" : "var(--surface)",
-                    cursor: "pointer",
-                  }}
-                >
-                  <div style={{ fontWeight: 800, fontSize: "0.88rem" }}>Pay with Cash / UPI</div>
-                  <div style={{ fontSize: "0.76rem", color: "var(--muted)", marginTop: 2 }}>
-                    Amount: <strong>₹{currentPlan.inr}</strong>
+                  <div style={{ fontSize: "0.76rem", color: "var(--muted)", marginTop: 4 }}>
+                    Cost: <strong>{currentPlan.credits} Credits</strong> (Balance: {userCredits})
                   </div>
                 </div>
               </div>
@@ -278,46 +373,47 @@ export default function RequestFormModal({ initial = {}, onClose, onSaved }) {
                   <button
                     type="button"
                     onClick={() => setShowUpgradeModal(true)}
-                    style={{ background: "none", border: "none", color: "var(--primary)", fontWeight: 700, cursor: "pointer", padding: 0 }}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      color: "var(--primary)",
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      textDecoration: "underline",
+                      padding: 0,
+                    }}
                   >
-                    Upgrade Pass / Add Credits
+                    Upgrade Pass for more credits
                   </button>
                 </div>
               )}
             </div>
 
-            {/* Actions */}
-            <div className="modal-actions" style={{ borderTop: "1px solid var(--border)", paddingTop: 14 }}>
+            {/* Bottom Actions */}
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 10 }}>
               <button type="button" className="btn btn-soft" onClick={onClose} disabled={processing}>
                 Cancel
               </button>
               <button
                 type="button"
-                className="btn"
-                onClick={handleInstantUnlock}
+                className="btn btn-primary"
+                onClick={handleCheckout}
                 disabled={processing || Boolean(alreadyOwnedInfo) || (paymentMode === "credits" && !hasEnoughCredits)}
-                style={{
-                  background: alreadyOwnedInfo ? "var(--border)" : "linear-gradient(135deg, #10b981 0%, #059669 100%)",
-                  color: alreadyOwnedInfo ? "var(--muted)" : "#fff",
-                  fontWeight: 700,
-                  padding: "10px 22px",
-                  cursor: alreadyOwnedInfo ? "not-allowed" : "pointer",
-                }}
               >
-                {alreadyOwnedInfo
-                  ? "Already in Your Library"
-                  : processing
-                  ? "Processing..."
-                  : `Pay ${requiredAmount} & Add to Library`}
+                {processing ? (
+                  "Processing..."
+                ) : paymentMode === "razorpay" ? (
+                  `Pay ₹${currentPlan.inr} via Razorpay`
+                ) : (
+                  `Unlock with ${currentPlan.credits} Credits`
+                )}
               </button>
             </div>
           </div>
         )}
       </Modal>
 
-      {showUpgradeModal && (
-        <MembershipModal onClose={() => setShowUpgradeModal(false)} />
-      )}
+      {showUpgradeModal && <MembershipModal onClose={() => setShowUpgradeModal(false)} />}
     </>
   );
 }

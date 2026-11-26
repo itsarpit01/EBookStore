@@ -57,7 +57,7 @@ const userSchema = new mongoose.Schema(
         },
         paymentMode: {
           type: String,
-          enum: ["credits", "cash"],
+          enum: ["credits", "cash", "razorpay"],
           default: "credits",
         },
         amountPaid: { type: Number, default: 0 },

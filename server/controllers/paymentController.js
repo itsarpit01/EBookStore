@@ -1,10 +1,12 @@
 import Razorpay from "razorpay";
 import crypto from "crypto";
 import User from "../models/User.js";
+import Book from "../models/Book.js";
 import Issue from "../models/Issue.js";
+import PurchaseRequest from "../models/PurchaseRequest.js";
 import Transaction from "../models/Transaction.js";
-import { calcFine, withOverdueInfo } from "../utils/fine.js";
 
+// Helper: Razorpay SDK Instance
 const getRazorpayInstance = () => {
   if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
     throw new Error("Razorpay API keys are not configured in environment variables");
@@ -20,46 +22,30 @@ const PLAN_DETAILS = {
   ultimate: { amount: 999, months: 12 },
 };
 
-/**
- * Model B: Prorated Calculation Helper
- */
+// Helper: Prorated Upgrade Calculation for Passes
 const calculateProratedAmount = (user, targetTier) => {
   const targetPlan = PLAN_DETAILS[targetTier];
-  if (!targetPlan) return { payableAmount: 0, credit: 0, remainingDays: 0 };
+  if (!targetPlan) return { payableAmount: 0 };
 
   const currentTier = user?.membership?.tier;
   const expiresAt = user?.membership?.expiresAt;
 
-  if (
-    targetTier === "ultimate" &&
-    currentTier === "premium" &&
-    expiresAt &&
-    new Date(expiresAt) > new Date()
-  ) {
-    const currentPlan = PLAN_DETAILS.premium;
-    const totalDays = currentPlan.months * 30;
+  if (targetTier === "ultimate" && currentTier === "premium" && expiresAt && new Date(expiresAt) > new Date()) {
+    const totalDays = 6 * 30;
     const remainingMs = new Date(expiresAt).getTime() - Date.now();
     const remainingDays = Math.max(0, Math.ceil(remainingMs / (1000 * 60 * 60 * 24)));
-
     const unusedRatio = Math.min(1, Math.max(0, remainingDays / totalDays));
-    const credit = Math.round(currentPlan.amount * unusedRatio);
-    const payableAmount = Math.max(1, targetPlan.amount - credit);
-
-    return {
-      payableAmount,
-      credit,
-      remainingDays,
-    };
+    const credit = Math.round(PLAN_DETAILS.premium.amount * unusedRatio);
+    return { payableAmount: Math.max(1, targetPlan.amount - credit) };
   }
 
-  return {
-    payableAmount: targetPlan.amount,
-    credit: 0,
-    remainingDays: 0,
-  };
+  return { payableAmount: targetPlan.amount };
 };
 
-// 1. Create Razorpay Order for Membership Plans
+// ─────────────────────────────────────────────────────────────
+// 1. MEMBERSHIP PASS PAYMENTS (Premium ₹499 / Ultimate ₹999)
+// ─────────────────────────────────────────────────────────────
+
 export const createOrder = async (req, res) => {
   try {
     const { tier } = req.body;
@@ -69,26 +55,18 @@ export const createOrder = async (req, res) => {
 
     const userId = req.user?.id || req.user?._id;
     const user = await User.findById(userId);
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
+    if (!user) return res.status(404).json({ message: "User not found" });
 
     const { payableAmount } = calculateProratedAmount(user, tier);
     const razorpay = getRazorpayInstance();
-    const receipt = `rcpt_${userId.toString().slice(-6)}_${Date.now().toString().slice(-6)}`;
+    const receipt = `pass_${userId.toString().slice(-4)}_${Date.now().toString().slice(-6)}`;
 
-    const options = {
-      amount: payableAmount * 100,
+    const order = await razorpay.orders.create({
+      amount: payableAmount * 100, // in paise
       currency: "INR",
       receipt,
-      notes: {
-        userId: userId.toString(),
-        tier,
-        type: "membership",
-      },
-    };
-
-    const order = await razorpay.orders.create(options);
+      notes: { userId: userId.toString(), tier, type: "membership" },
+    });
 
     await Transaction.create({
       user: userId,
@@ -113,39 +91,25 @@ export const createOrder = async (req, res) => {
   }
 };
 
-// 2. Client-side Verification Callback for Membership Plans
 export const verifyPayment = async (req, res) => {
   try {
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature, tier } = req.body;
-
     if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !tier) {
-      return res.status(400).json({ message: "Missing required payment verification details" });
+      return res.status(400).json({ message: "Missing payment verification details" });
     }
 
     const plan = PLAN_DETAILS[tier];
-    if (!plan) {
-      return res.status(400).json({ message: "Invalid plan" });
-    }
+    if (!plan) return res.status(400).json({ message: "Invalid plan" });
 
     const userId = req.user?.id || req.user?._id;
-    const body = `${razorpay_order_id}|${razorpay_payment_id}`;
     const expectedSignature = crypto
       .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
-      .update(body.toString())
+      .update(`${razorpay_order_id}|${razorpay_payment_id}`)
       .digest("hex");
 
     if (expectedSignature !== razorpay_signature) {
-      await Transaction.findOneAndUpdate(
-        { orderId: razorpay_order_id },
-        { status: "failed", failureReason: "Invalid cryptographic signature" }
-      );
-      return res.status(400).json({ message: "Invalid payment signature. Verification failed." });
-    }
-
-    const existingTx = await Transaction.findOne({ orderId: razorpay_order_id });
-    if (existingTx && existingTx.status === "success") {
-      const user = await User.findById(userId).select("-password");
-      return res.status(200).json({ message: "Plan already upgraded!", user });
+      await Transaction.findOneAndUpdate({ orderId: razorpay_order_id }, { status: "failed" });
+      return res.status(400).json({ message: "Invalid payment signature" });
     }
 
     const startDate = new Date();
@@ -154,292 +118,234 @@ export const verifyPayment = async (req, res) => {
 
     await Transaction.findOneAndUpdate(
       { orderId: razorpay_order_id },
-      {
-        paymentId: razorpay_payment_id,
-        status: "success",
-        startDate,
-        endDate,
-      },
+      { paymentId: razorpay_payment_id, status: "success", startDate, endDate },
       { upsert: true }
     );
 
     const updatedUser = await User.findByIdAndUpdate(
       userId,
-      {
-        membership: {
-          tier,
-          startedAt: startDate,
-          expiresAt: endDate,
-        },
-      },
+      { membership: { tier, startedAt: startDate, expiresAt: endDate } },
       { new: true }
     ).select("-password");
 
-    res.status(200).json({
-      message: `Successfully upgraded to ${tier.toUpperCase()} Plan!`,
-      user: updatedUser,
-    });
+    res.status(200).json({ message: `Upgraded to ${tier.toUpperCase()} Pass!`, user: updatedUser });
   } catch (error) {
     console.error("Payment verification error:", error);
     res.status(500).json({ message: error.message || "Failed to verify payment" });
   }
 };
 
-// 3. Create Razorpay Order for Late Fine
-export const createFineOrder = async (req, res) => {
+// ─────────────────────────────────────────────────────────────
+// 2. BOOK RENT & BUY PAYMENTS (1-Day, 1-Week, 1-Year, Lifetime)
+// ─────────────────────────────────────────────────────────────
+
+export const createBookOrder = async (req, res) => {
   try {
-    const { issueId } = req.body;
-    if (!issueId) {
-      return res.status(400).json({ message: "issueId is required" });
-    }
-
+    const { bookId, plan } = req.body;
     const userId = req.user?.id || req.user?._id;
-    const issue = await Issue.findOne({ _id: issueId, member: userId }).populate("book", "title");
-    if (!issue) {
-      return res.status(404).json({ message: "Issue record not found" });
+
+    const book = await Book.findById(bookId);
+    if (!book) return res.status(404).json({ message: "Book not found" });
+
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    // Duplicate check
+    const existing = (user.digitalShelf || []).find((i) => i.book && i.book.toString() === bookId.toString());
+    if (existing) {
+      if (existing.plan === "lifetime" || !existing.expiresAt) {
+        return res.status(400).json({ message: "You already own lifetime access to this e-book." });
+      }
+      if (new Date(existing.expiresAt) > new Date()) {
+        return res.status(400).json({ message: "You already have an active rental for this e-book." });
+      }
     }
 
-    if (issue.finePaid) {
-      return res.status(400).json({ message: "Fine for this book has already been paid" });
-    }
-
-    const fineAmount = issue.status === "returned" ? issue.fine : calcFine(issue.dueDate);
-    if (!fineAmount || fineAmount <= 0) {
-      return res.status(400).json({ message: "No fine due on this book" });
-    }
+    const pricing = {
+      day: book.rentalPlans?.day?.inr ?? 20,
+      week: book.rentalPlans?.week?.inr ?? 70,
+      year: book.rentalPlans?.year?.inr ?? 299,
+      lifetime: book.price ?? 349,
+    };
+    const amountInInr = pricing[plan] || pricing.week;
 
     const razorpay = getRazorpayInstance();
-    const receipt = `fine_${issue._id.toString().slice(-6)}_${Date.now().toString().slice(-6)}`;
-
-    const options = {
-      amount: fineAmount * 100, // in paise
+    const order = await razorpay.orders.create({
+      amount: amountInInr * 100,
       currency: "INR",
-      receipt,
-      notes: {
-        userId: userId.toString(),
-        issueId: issue._id.toString(),
-        type: "fine",
-        bookTitle: issue.book?.title || "Book",
-      },
-    };
-
-    const order = await razorpay.orders.create(options);
+      receipt: `bk_${userId.toString().slice(-4)}_${Date.now().toString().slice(-6)}`,
+      notes: { userId: userId.toString(), bookId: bookId.toString(), plan, type: "book_access" },
+    });
 
     await Transaction.create({
       user: userId,
       orderId: order.id,
-      amount: fineAmount,
-      type: "fine",
-      tier: "fine",
-      issue: issue._id,
-      bookTitle: issue.book?.title || "Book",
+      amount: amountInInr,
+      type: "book_access",
       currency: order.currency,
       status: "pending",
+      bookTitle: book.title,
     });
 
     res.status(201).json({
       orderId: order.id,
       amount: order.amount,
       currency: order.currency,
-      fine: fineAmount,
-      bookTitle: issue.book?.title || "Book",
       keyId: process.env.RAZORPAY_KEY_ID,
+      bookTitle: book.title,
     });
   } catch (error) {
-    console.error("Fine order creation error:", error);
-    res.status(500).json({ message: error.message || "Failed to create fine payment order" });
+    console.error("Book order error:", error);
+    res.status(500).json({ message: error.message || "Failed to create book payment order" });
   }
 };
 
-// 4. Verify Razorpay Payment for Late Fine
-export const verifyFinePayment = async (req, res) => {
+export const verifyBookPayment = async (req, res) => {
   try {
-    const { razorpay_order_id, razorpay_payment_id, razorpay_signature, issueId } = req.body;
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature, bookId, plan } = req.body;
+    const userId = req.user?.id || req.user?._id;
 
-    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !issueId) {
-      return res.status(400).json({ message: "Missing required fine verification details" });
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !bookId || !plan) {
+      return res.status(400).json({ message: "Missing required verification details" });
     }
 
-    const body = `${razorpay_order_id}|${razorpay_payment_id}`;
     const expectedSignature = crypto
       .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
-      .update(body.toString())
+      .update(`${razorpay_order_id}|${razorpay_payment_id}`)
       .digest("hex");
 
     if (expectedSignature !== razorpay_signature) {
-      await Transaction.findOneAndUpdate(
-        { orderId: razorpay_order_id },
-        { status: "failed", failureReason: "Invalid cryptographic signature" }
-      );
-      return res.status(400).json({ message: "Invalid payment signature. Verification failed." });
+      await Transaction.findOneAndUpdate({ orderId: razorpay_order_id }, { status: "failed" });
+      return res.status(400).json({ message: "Invalid payment signature" });
     }
 
-    const tx = await Transaction.findOne({ orderId: razorpay_order_id });
-    const fineAmount = tx ? tx.amount : 0;
+    const book = await Book.findById(bookId);
+    if (!book) return res.status(404).json({ message: "Book not found" });
 
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    const daysMap = { day: 1, week: 7, year: 365, lifetime: 3650 };
+    const pricing = {
+      day: book.rentalPlans?.day?.inr ?? 20,
+      week: book.rentalPlans?.week?.inr ?? 70,
+      year: book.rentalPlans?.year?.inr ?? 299,
+      lifetime: book.price ?? 349,
+    };
+    const days = daysMap[plan] || 7;
+    const amountInInr = pricing[plan] || 70;
+
+    const now = new Date();
+    const expiresAt = plan === "lifetime" ? null : new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
+
+    // 1. Digital Shelf update
+    if (!user.digitalShelf) user.digitalShelf = [];
+    const idx = user.digitalShelf.findIndex((i) => i.book && i.book.toString() === bookId.toString());
+    const shelfEntry = { book: bookId, plan, paymentMode: "razorpay", amountPaid: amountInInr, acquiredAt: now, expiresAt };
+    if (idx >= 0) user.digitalShelf[idx] = shelfEntry;
+    else user.digitalShelf.push(shelfEntry);
+    await user.save();
+
+    // 2. Issue Record create/update
+    const issueDueDate = expiresAt || new Date(Date.now() + 3650 * 24 * 60 * 60 * 1000);
+    let issueDoc = await Issue.findOne({ book: bookId, member: userId, status: "issued" });
+    if (issueDoc) {
+      issueDoc.dueDate = issueDueDate;
+      issueDoc.digitalPlan = plan;
+      issueDoc.paymentMode = "razorpay";
+      await issueDoc.save();
+    } else {
+      issueDoc = await Issue.create({
+        book: bookId,
+        member: userId,
+        issuedBy: userId,
+        issueDate: now,
+        dueDate: issueDueDate,
+        status: "issued",
+        accessMode: "digital",
+        digitalPlan: plan,
+        paymentMode: "razorpay",
+      });
+    }
+
+    // 3. PurchaseRequest Receipt log
+    await PurchaseRequest.create({
+      requestedBy: userId,
+      book: bookId,
+      title: book.title,
+      author: book.author,
+      isbn: book.isbn,
+      quantity: 1,
+      neededUntil: issueDueDate,
+      reason: `Digital ${plan.toUpperCase()} Access (₹${amountInInr} via Razorpay)`,
+      status: "approved",
+      accessMode: "digital",
+      digitalPlan: plan,
+      paymentMode: "razorpay",
+      creditCost: amountInInr,
+      creditsDeducted: false,
+      issue: issueDoc._id,
+    });
+
+    // 4. Update Transaction
     await Transaction.findOneAndUpdate(
       { orderId: razorpay_order_id },
-      {
-        paymentId: razorpay_payment_id,
-        status: "success",
-      },
-      { upsert: true }
+      { paymentId: razorpay_payment_id, status: "success", startDate: now, endDate: expiresAt }
     );
 
-    const updatedIssue = await Issue.findByIdAndUpdate(
-      issueId,
-      {
-        finePaid: true,
-        finePaymentId: razorpay_payment_id,
-        finePaidAt: new Date(),
-        fine: fineAmount,
-      },
-      { new: true }
-    ).populate("book", "title author");
-
-    res.status(200).json({
-      message: `Late fine of ₹${fineAmount} paid successfully!`,
-      issue: withOverdueInfo(updatedIssue),
-    });
+    res.json({ success: true, message: `Payment verified! "${book.title}" added to your My Library.`, plan, expiresAt });
   } catch (error) {
-    console.error("Fine verification error:", error);
-    res.status(500).json({ message: error.message || "Failed to verify fine payment" });
+    console.error("Book verify error:", error);
+    res.status(500).json({ message: error.message || "Failed to verify book payment" });
   }
 };
 
-// 5. Mark Order Failed
+// ─────────────────────────────────────────────────────────────
+// 3. TRANSACTION UTILITIES & WEBHOOK
+// ─────────────────────────────────────────────────────────────
+
 export const markPaymentFailed = async (req, res) => {
   try {
     const { orderId, reason } = req.body;
-    if (!orderId) {
-      return res.status(400).json({ message: "orderId is required" });
-    }
-
     await Transaction.findOneAndUpdate(
       { orderId, status: "pending" },
-      {
-        status: "failed",
-        failureReason: reason || "User cancelled payment or closed popup",
-      }
+      { status: "failed", failureReason: reason || "User cancelled payment or closed popup" }
     );
-
     res.status(200).json({ message: "Payment marked as failed" });
   } catch (error) {
     res.status(500).json({ message: "Failed to update transaction status" });
   }
 };
 
-// 6. Razorpay Webhook
-export const handleWebhook = async (req, res) => {
-  try {
-    const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
-    if (!webhookSecret) {
-      return res.status(500).json({ message: "Webhook secret is not configured" });
-    }
-
-    const signature = req.headers["x-razorpay-signature"];
-    const shasum = crypto.createHmac("sha256", webhookSecret);
-    shasum.update(JSON.stringify(req.body));
-    const digest = shasum.digest("hex");
-
-    if (digest !== signature) {
-      return res.status(400).json({ message: "Invalid signature" });
-    }
-
-    const event = req.body.event;
-    const payload = req.body.payload;
-
-    if (event === "payment.captured" || event === "order.paid") {
-      const paymentEntity = payload.payment.entity;
-      const orderId = paymentEntity.order_id;
-      const paymentId = paymentEntity.id;
-      const type = paymentEntity.notes?.type || "membership";
-
-      if (type === "fine") {
-        const issueId = paymentEntity.notes?.issueId;
-        await Transaction.findOneAndUpdate(
-          { orderId },
-          { paymentId, status: "success" },
-          { upsert: true }
-        );
-        if (issueId) {
-          await Issue.findByIdAndUpdate(issueId, {
-            finePaid: true,
-            finePaymentId: paymentId,
-            finePaidAt: new Date(),
-          });
-        }
-      } else {
-        const tier = paymentEntity.notes?.tier || "premium";
-        const userId = paymentEntity.notes?.userId;
-        const plan = PLAN_DETAILS[tier] || PLAN_DETAILS.premium;
-
-        const existingTx = await Transaction.findOne({ orderId });
-        if (!existingTx || existingTx.status !== "success") {
-          const startDate = new Date();
-          const endDate = new Date(startDate);
-          endDate.setMonth(endDate.getMonth() + plan.months);
-
-          await Transaction.findOneAndUpdate(
-            { orderId },
-            {
-              user: userId,
-              tier,
-              amount: paymentEntity.amount / 100,
-              paymentId,
-              status: "success",
-              startDate,
-              endDate,
-            },
-            { upsert: true }
-          );
-
-          if (userId) {
-            await User.findByIdAndUpdate(userId, {
-              membership: { tier, startedAt: startDate, expiresAt: endDate },
-            });
-          }
-        }
-      }
-    } else if (event === "payment.failed") {
-      const paymentEntity = payload.payment.entity;
-      const orderId = paymentEntity.order_id;
-      const errorDesc = paymentEntity.error_description || "Payment failed at bank";
-
-      await Transaction.findOneAndUpdate(
-        { orderId },
-        { status: "failed", failureReason: errorDesc }
-      );
-    }
-
-    res.status(200).json({ status: "ok" });
-  } catch (error) {
-    console.error("Webhook processing error:", error);
-    res.status(500).json({ message: "Internal webhook error" });
-  }
-};
-
-// 7. Get Current User's Transaction History
 export const getMyTransactions = async (req, res) => {
   try {
     const userId = req.user?.id || req.user?._id;
-    const oneMinuteAgo = new Date(Date.now() - 1 * 60 * 1000);
-
-    await Transaction.updateMany(
-      {
-        user: userId,
-        status: "pending",
-        createdAt: { $lt: oneMinuteAgo },
-      },
-      {
-        status: "failed",
-        failureReason: "Payment session closed or abandoned",
-      }
-    );
-
     const transactions = await Transaction.find({ user: userId }).sort({ createdAt: -1 });
     res.status(200).json(transactions);
   } catch (error) {
     res.status(500).json({ message: "Failed to fetch transactions" });
+  }
+};
+
+export const handleWebhook = async (req, res) => {
+  try {
+    const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
+    if (!secret) return res.status(500).json({ message: "Webhook secret missing" });
+
+    const signature = req.headers["x-razorpay-signature"];
+    const shasum = crypto.createHmac("sha256", secret).update(JSON.stringify(req.body)).digest("hex");
+    if (shasum !== signature) return res.status(400).json({ message: "Invalid signature" });
+
+    const { event, payload } = req.body;
+    if (event === "payment.captured" || event === "order.paid") {
+      const p = payload.payment.entity;
+      await Transaction.findOneAndUpdate({ orderId: p.order_id }, { paymentId: p.id, status: "success" }, { upsert: true });
+    } else if (event === "payment.failed") {
+      const p = payload.payment.entity;
+      await Transaction.findOneAndUpdate({ orderId: p.order_id }, { status: "failed", failureReason: p.error_description });
+    }
+    res.status(200).json({ status: "ok" });
+  } catch (error) {
+    res.status(500).json({ message: "Webhook error" });
   }
 };

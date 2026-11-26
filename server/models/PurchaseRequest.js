@@ -30,7 +30,7 @@ const purchaseRequestSchema = new mongoose.Schema(
     },
     paymentMode: {
       type: String,
-      enum: ["credits", "cash"],
+      enum: ["credits", "cash", "razorpay"],
       default: null,
     },
     creditCost: {

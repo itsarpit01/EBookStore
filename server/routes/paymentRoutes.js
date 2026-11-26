@@ -2,8 +2,8 @@ import express from "express";
 import {
   createOrder,
   verifyPayment,
-  createFineOrder,
-  verifyFinePayment,
+  createBookOrder,
+  verifyBookPayment,
   markPaymentFailed,
   handleWebhook,
   getMyTransactions,
@@ -15,15 +15,15 @@ const router = express.Router();
 // Public Webhook (Razorpay Server)
 router.post("/webhook", handleWebhook);
 
-// Protected Membership Endpoints
+// Protected Membership Pass Endpoints
 router.post("/create-order", protect, createOrder);
 router.post("/verify", protect, verifyPayment);
 
-// Protected Late Fine Endpoints
-router.post("/create-fine-order", protect, createFineOrder);
-router.post("/verify-fine", protect, verifyFinePayment);
+// Protected Book Rent / Purchase Endpoints
+router.post("/create-book-order", protect, createBookOrder);
+router.post("/verify-book-order", protect, verifyBookPayment);
 
-// Payment Session Tracking
+// Transaction History & Tracking
 router.post("/mark-failed", protect, markPaymentFailed);
 router.get("/my-transactions", protect, getMyTransactions);
 
