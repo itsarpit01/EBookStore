@@ -2,7 +2,6 @@ import Issue from "../models/Issue.js";
 import Book from "../models/Book.js";
 import User from "../models/User.js";
 import PurchaseRequest from "../models/PurchaseRequest.js";
-import { getEffectiveTier } from "../utils/membershipConfig.js";
 
 /**
  * GET /api/issues

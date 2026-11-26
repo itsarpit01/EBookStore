@@ -1,64 +1,23 @@
 import express from "express";
+import { protect, authorizeRoles } from "../middleware/authMiddleware.js";
 import {
-  issueBook,
-  reissue,
-  returnBook,
   getIssues,
   getMyIssues,
-  requestReissue,
-  cancelReissue,
-  rejectReissue,
+  returnBook,
 } from "../controllers/issueController.js";
-import { protect, authorizeRoles } from "../middleware/authMiddleware.js";
-import { validate } from "../middleware/validate.js";
-import {
-  issueBookSchema,
-  reissueSchema,
-  issueIdParamSchema,
-} from "../validators/issueValidator.js";
 
 const router = express.Router();
 
+// Har request ke liye login required
 router.use(protect);
 
-// Purchaser routes
-router.get("/my", authorizeRoles("purchaser"), getMyIssues);
-router.patch(
-  "/:id/request-reissue",
-  authorizeRoles("purchaser"),
-  validate(issueIdParamSchema, "params"),
-  validate(reissueSchema),
-  requestReissue
-);
-router.patch(
-  "/:id/cancel-reissue",
-  authorizeRoles("purchaser"),
-  validate(issueIdParamSchema, "params"),
-  cancelReissue
-);
+// Reader: My active rented books & purchased library
+router.get("/my", getMyIssues);
 
-// Return route: Available to both Librarian & Purchaser (controller guards ownership)
-router.patch(
-  "/:id/return",
-  validate(issueIdParamSchema, "params"),
-  returnBook
-);
-
-// Librarian specific routes
+// Librarian: View all active readers & leases
 router.get("/", authorizeRoles("librarian"), getIssues);
-router.post("/", authorizeRoles("librarian"), validate(issueBookSchema), issueBook);
-router.patch(
-  "/:id/reissue",
-  authorizeRoles("librarian"),
-  validate(issueIdParamSchema, "params"),
-  validate(reissueSchema),
-  reissue
-);
-router.patch(
-  "/:id/reject-reissue",
-  authorizeRoles("librarian"),
-  validate(issueIdParamSchema, "params"),
-  rejectReissue
-);
+
+// Reader / Librarian: Early return of rented book (+5 Credits reward)
+router.post("/:id/return", returnBook);
 
 export default router;
