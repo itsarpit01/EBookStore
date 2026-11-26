@@ -8,18 +8,47 @@ import { formatDate } from "../utils/format";
 import Modal from "../components/Modal";
 import { SearchIcon } from "../components/Icons";
 
-// Exported for LibrarianRequests.jsx compatibility
-export const statusBadge = (status) => {
-  const cls = {
-    pending: "badge-warning",
-    counter_offered: "badge-warning",
-    approved: "badge-success",
-    rejected: "badge-danger",
-    returned: "badge",
-  }[status] || "badge";
+// ── Shared Status Badge for Purchaser & Librarian Panels ──
+export const statusBadge = (r) => {
+  if (!r) return null;
 
-  const label = status === "counter_offered" ? "Counter Offered" : status;
-  return <span className={`badge ${cls}`} style={{ textTransform: "capitalize", whiteSpace: "nowrap" }}>{label}</span>;
+  // Agar object pass hua hai
+  if (typeof r === "object") {
+    if (r.status === "returned") {
+      return (
+        <span className="badge" style={{ background: "var(--soft)", color: "var(--muted)", border: "1px solid var(--border)", fontWeight: 700 }}>
+          Returned
+        </span>
+      );
+    }
+
+    const isPurchase = r.digitalPlan === "lifetime" || r.reason?.toLowerCase().includes("lifetime");
+    if (isPurchase || r.status === "purchased") {
+      return (
+        <span className="badge" style={{ background: "#ecfdf5", color: "#065f46", border: "1px solid #a7f3d0", fontWeight: 700 }}>
+          Purchased
+        </span>
+      );
+    }
+
+    if (r.status === "approved" || r.accessMode === "digital" || r.digitalPlan) {
+      return (
+        <span className="badge" style={{ background: "#eef2ff", color: "#4338ca", border: "1px solid #c7d2fe", fontWeight: 700 }}>
+          Rented
+        </span>
+      );
+    }
+
+    if (r.status === "pending") return <span className="badge badge-warning">Pending</span>;
+    if (r.status === "rejected") return <span className="badge badge-danger">Rejected</span>;
+    return <span className="badge" style={{ textTransform: "capitalize" }}>{r.status}</span>;
+  }
+
+  // Fallback agar string pass hui ho
+  if (r === "returned") return <span className="badge" style={{ background: "var(--soft)", color: "var(--muted)", border: "1px solid var(--border)", fontWeight: 700 }}>Returned</span>;
+  if (r === "approved") return <span className="badge" style={{ background: "#eef2ff", color: "#4338ca", border: "1px solid #c7d2fe", fontWeight: 700 }}>Rented</span>;
+  const cls = { pending: "badge-warning", rejected: "badge-danger" }[r] || "badge";
+  return <span className={`badge ${cls}`} style={{ textTransform: "capitalize" }}>{r}</span>;
 };
 
 export default function PurchaserRequests() {
@@ -33,15 +62,11 @@ export default function PurchaserRequests() {
   // Filters & Search Toolbar
   const [statusFilter, setStatusFilter] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
-
-  // Date Range (From - To)
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
 
-  // Pagination state (8 items per page)
   const PAGE_SIZE = 8;
   const [page, setPage] = useState(1);
-
   const [viewRequest, setViewRequest] = useState(null);
 
   const load = useCallback(async () => {
@@ -62,45 +87,29 @@ export default function PurchaserRequests() {
 
   useEffect(() => {
     load();
-
-    const handleQuotaUpdate = () => {
-      load();
-    };
+    const handleQuotaUpdate = () => load();
     window.addEventListener("quota-updated", handleQuotaUpdate);
     return () => window.removeEventListener("quota-updated", handleQuotaUpdate);
   }, [load]);
 
-  // Reset page to 1 whenever search or filter changes
   useEffect(() => {
     setPage(1);
   }, [searchQuery, statusFilter, startDate, endDate]);
 
-  // Check if a request record is returned
   const isRequestReturned = (r) => {
     const isPurchase = r.digitalPlan === "lifetime" || r.reason?.toLowerCase().includes("lifetime");
     if (isPurchase) return false;
-
     if (r.status === "returned" || r.issue?.status === "returned") return true;
 
-    // Match with user's issue records
     const linkedIssue = myIssues.find(
       (i) =>
         String(i._id) === String(r.issue?._id || r.issue) ||
         String(i.book?._id || i.book) === String(r.book?._id || r.book)
     );
-
-    if (linkedIssue) {
-      return linkedIssue.status === "returned";
-    }
-
-    if (r.neededUntil && new Date(r.neededUntil) < new Date()) {
-      return true;
-    }
-
-    return false;
+    if (linkedIssue) return linkedIssue.status === "returned";
+    return Boolean(r.neededUntil && new Date(r.neededUntil) < new Date());
   };
 
-  // Filtered requests by Tab, Search query & Date Range
   const filteredRequests = useMemo(() => {
     const todayStr = new Date().toISOString().slice(0, 10);
 
@@ -108,12 +117,10 @@ export default function PurchaserRequests() {
       const isPurchase = r.digitalPlan === "lifetime" || r.reason?.toLowerCase().includes("lifetime");
       const returned = isRequestReturned(r);
 
-      // Filter by Order Type Tab
       if (statusFilter === "purchased" && !isPurchase) return false;
       if (statusFilter === "rented" && (isPurchase || returned)) return false;
       if (statusFilter === "returned" && !returned) return false;
 
-      // Search Query
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         const matchTitle = r.title?.toLowerCase().includes(q);
@@ -121,68 +128,22 @@ export default function PurchaserRequests() {
         if (!matchTitle && !matchAuthor) return false;
       }
 
-      // Date Range
       if (startDate || endDate) {
         const createdDate = r.createdAt ? new Date(r.createdAt).toISOString().slice(0, 10) : "";
         const fromDate = startDate || "1970-01-01";
         const toDate = endDate || todayStr;
-
-        if (createdDate < fromDate || createdDate > toDate) {
-          return false;
-        }
+        if (createdDate < fromDate || createdDate > toDate) return false;
       }
 
       return true;
     });
   }, [requests, myIssues, statusFilter, searchQuery, startDate, endDate]);
 
-  // Paginated slice
   const totalPages = Math.max(1, Math.ceil(filteredRequests.length / PAGE_SIZE));
   const paginatedRequests = useMemo(() => {
     const start = (page - 1) * PAGE_SIZE;
     return filteredRequests.slice(start, start + PAGE_SIZE);
   }, [filteredRequests, page]);
-
-  const clearDateRange = () => {
-    setStartDate("");
-    setEndDate("");
-  };
-
-  const getOrderStatusBadge = (r) => {
-    const isPurchase = r.digitalPlan === "lifetime" || r.reason?.toLowerCase().includes("lifetime");
-
-    if (isPurchase) {
-      return (
-        <span
-          className="badge"
-          style={{ background: "#ecfdf5", color: "#065f46", border: "1px solid #a7f3d0", fontWeight: 700 }}
-        >
-          Purchased
-        </span>
-      );
-    }
-
-    // Check if returned
-    if (isRequestReturned(r)) {
-      return (
-        <span
-          className="badge"
-          style={{ background: "var(--soft)", color: "var(--muted)", border: "1px solid var(--border)", fontWeight: 700 }}
-        >
-          Returned
-        </span>
-      );
-    }
-
-    return (
-      <span
-        className="badge"
-        style={{ background: "#eef2ff", color: "#4338ca", border: "1px solid #c7d2fe", fontWeight: 700 }}
-      >
-        Rented
-      </span>
-    );
-  };
 
   return (
     <>
@@ -197,16 +158,7 @@ export default function PurchaserRequests() {
       </div>
 
       {/* Toolbar */}
-      <div
-        className="toolbar"
-        style={{
-          display: "flex",
-          gap: 12,
-          alignItems: "center",
-          flexWrap: "wrap",
-          marginBottom: 16,
-        }}
-      >
+      <div className="toolbar" style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 16 }}>
         <div className="tabs" style={{ marginBottom: 0 }}>
           {[
             { key: "", label: "All Orders" },
@@ -226,18 +178,7 @@ export default function PurchaserRequests() {
         </div>
 
         <div style={{ position: "relative", minWidth: 220, flex: 1 }}>
-          <span
-            style={{
-              position: "absolute",
-              left: 10,
-              top: "50%",
-              transform: "translateY(-50%)",
-              color: "var(--muted)",
-              display: "flex",
-              alignItems: "center",
-              pointerEvents: "none",
-            }}
-          >
+          <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--muted)", display: "flex", alignItems: "center", pointerEvents: "none" }}>
             <SearchIcon size={16} />
           </span>
           <input
@@ -250,50 +191,13 @@ export default function PurchaserRequests() {
           />
         </div>
 
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            background: "var(--surface)",
-            padding: "4px 8px",
-            borderRadius: 8,
-            border: "1px solid var(--border)",
-            flexShrink: 0,
-          }}
-        >
-          <span style={{ fontSize: "0.8rem", color: "var(--muted)", fontWeight: 600 }}>
-            From:
-          </span>
-          <input
-            type="date"
-            className="toolbar-input"
-            value={startDate}
-            onChange={(e) => setStartDate(e.target.value)}
-            style={{ width: 125, padding: "4px 6px", fontSize: "0.8rem" }}
-            title="Start date"
-          />
-
-          <span style={{ fontSize: "0.8rem", color: "var(--muted)", fontWeight: 600 }}>
-            To:
-          </span>
-          <input
-            type="date"
-            className="toolbar-input"
-            value={endDate}
-            onChange={(e) => setEndDate(e.target.value)}
-            placeholder="Today"
-            style={{ width: 125, padding: "4px 6px", fontSize: "0.8rem" }}
-            title="End date"
-          />
-
+        <div style={{ display: "flex", alignItems: "center", gap: 6, background: "var(--surface)", padding: "4px 8px", borderRadius: 8, border: "1px solid var(--border)", flexShrink: 0 }}>
+          <span style={{ fontSize: "0.8rem", color: "var(--muted)", fontWeight: 600 }}>From:</span>
+          <input type="date" className="toolbar-input" value={startDate} onChange={(e) => setStartDate(e.target.value)} style={{ width: 125, padding: "4px 6px", fontSize: "0.8rem" }} />
+          <span style={{ fontSize: "0.8rem", color: "var(--muted)", fontWeight: 600 }}>To:</span>
+          <input type="date" className="toolbar-input" value={endDate} onChange={(e) => setEndDate(e.target.value)} style={{ width: 125, padding: "4px 6px", fontSize: "0.8rem" }} />
           {(startDate || endDate) && (
-            <button
-              className="btn btn-soft btn-sm"
-              onClick={clearDateRange}
-              style={{ padding: "3px 8px", fontSize: "0.75rem", marginLeft: 2 }}
-              title="Reset date range"
-            >
+            <button className="btn btn-soft btn-sm" onClick={() => { setStartDate(""); setEndDate(""); }} style={{ padding: "3px 8px", fontSize: "0.75rem" }}>
               Clear
             </button>
           )}
@@ -304,24 +208,20 @@ export default function PurchaserRequests() {
         <p className="empty">Loading your orders...</p>
       ) : filteredRequests.length === 0 ? (
         <div style={{ textAlign: "center", padding: "60px 20px" }}>
-          <p style={{ fontSize: "1.1rem", color: "var(--muted)", marginBottom: 16 }}>
-            No orders matching your filters.
-          </p>
-          <Link to="/purchaser/books" className="btn">
-            Browse Store to Rent or Buy
-          </Link>
+          <p style={{ fontSize: "1.1rem", color: "var(--muted)", marginBottom: 16 }}>No orders matching your filters.</p>
+          <Link to="/purchaser/books" className="btn">Browse Store to Rent or Buy</Link>
         </div>
       ) : (
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                <th style={{ whiteSpace: "nowrap" }}>Book Title</th>
-                <th style={{ whiteSpace: "nowrap" }}>Order Date</th>
-                <th style={{ whiteSpace: "nowrap" }}>Access Plan</th>
-                <th style={{ whiteSpace: "nowrap" }}>Valid Until</th>
-                <th style={{ whiteSpace: "nowrap" }}>Status</th>
-                <th style={{ whiteSpace: "nowrap", textAlign: "right" }}>Actions</th>
+                <th>Book Title</th>
+                <th>Order Date</th>
+                <th>Access Plan</th>
+                <th>Valid Until</th>
+                <th>Status</th>
+                <th style={{ textAlign: "right" }}>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -332,13 +232,9 @@ export default function PurchaserRequests() {
                   <tr key={r._id}>
                     <td>
                       <div style={{ fontWeight: 600 }}>{r.title}</div>
-                      {r.author && (
-                        <span className="cell-sub">by {r.author}</span>
-                      )}
+                      {r.author && <span className="cell-sub">by {r.author}</span>}
                     </td>
-
                     <td style={{ whiteSpace: "nowrap" }}>{formatDate(r.createdAt)}</td>
-
                     <td>
                       <span
                         style={{
@@ -353,25 +249,20 @@ export default function PurchaserRequests() {
                         {isPurchase ? "Lifetime Purchase" : `${r.digitalPlan?.toUpperCase() || "DIGITAL"} Rental`}
                       </span>
                     </td>
-
                     <td style={{ whiteSpace: "nowrap" }}>
                       {isPurchase ? (
-                        <span style={{ color: "#059669", fontWeight: 700, fontSize: "0.84rem" }}>
-                          Lifetime Access
-                        </span>
+                        <span style={{ color: "#059669", fontWeight: 700, fontSize: "0.84rem" }}>Lifetime Access</span>
                       ) : (
                         formatDate(r.neededUntil)
                       )}
                     </td>
-
-                    <td>{getOrderStatusBadge(r)}</td>
-
+                    <td>{statusBadge(r)}</td>
                     <td style={{ textAlign: "right" }}>
                       <button
                         type="button"
                         className="btn btn-soft btn-sm"
                         onClick={() => setViewRequest(r)}
-                        style={{ whiteSpace: "nowrap", fontSize: "0.78rem", padding: "4px 10px" }}
+                        style={{ fontSize: "0.78rem", padding: "4px 10px" }}
                       >
                         View Details
                       </button>
@@ -382,57 +273,13 @@ export default function PurchaserRequests() {
             </tbody>
           </table>
 
-          {/* Jump Pagination */}
           {totalPages > 1 && (
-            <div
-              className="pagination"
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: 6,
-                marginTop: 16,
-              }}
-            >
-              <button
-                type="button"
-                className="btn btn-soft btn-sm"
-                disabled={page <= 1}
-                onClick={() => setPage(1)}
-              >
-                « First
-              </button>
-
-              <button
-                type="button"
-                className="btn btn-soft btn-sm"
-                disabled={page <= 1}
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-              >
-                ‹ Prev
-              </button>
-
-              <span style={{ fontSize: "0.85rem", fontWeight: 600, padding: "0 8px" }}>
-                Page {page} of {totalPages}
-              </span>
-
-              <button
-                type="button"
-                className="btn btn-soft btn-sm"
-                disabled={page >= totalPages}
-                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              >
-                Next ›
-              </button>
-
-              <button
-                type="button"
-                className="btn btn-soft btn-sm"
-                disabled={page >= totalPages}
-                onClick={() => setPage(totalPages)}
-              >
-                Last »
-              </button>
+            <div className="pagination" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 16 }}>
+              <button type="button" className="btn btn-soft btn-sm" disabled={page <= 1} onClick={() => setPage(1)}>« First</button>
+              <button type="button" className="btn btn-soft btn-sm" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>‹ Prev</button>
+              <span style={{ fontSize: "0.85rem", fontWeight: 600, padding: "0 8px" }}>Page {page} of {totalPages}</span>
+              <button type="button" className="btn btn-soft btn-sm" disabled={page >= totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))}>Next ›</button>
+              <button type="button" className="btn btn-soft btn-sm" disabled={page >= totalPages} onClick={() => setPage(totalPages)}>Last »</button>
             </div>
           )}
         </div>
@@ -462,16 +309,11 @@ export default function PurchaserRequests() {
                   : formatDate(viewRequest.neededUntil)}
               </span>
             </p>
-            <p>
-              <span>Payment Details</span>
-              <span>{viewRequest.reason || "Completed"}</span>
-            </p>
-            <p><span>Status</span>{getOrderStatusBadge(viewRequest)}</p>
+            <p><span>Payment Details</span><span>{viewRequest.reason || "Completed"}</span></p>
+            <p><span>Status</span>{statusBadge(viewRequest)}</p>
           </div>
           <div className="modal-actions">
-            <button className="btn btn-soft" onClick={() => setViewRequest(null)}>
-              Close
-            </button>
+            <button className="btn btn-soft" onClick={() => setViewRequest(null)}>Close</button>
           </div>
         </Modal>
       )}
