@@ -130,35 +130,42 @@ input:focus, select:focus, textarea:focus {
 }
 
 /* ---------- Buttons ---------- */
+/* ---------- Buttons ---------- */
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   padding: 10px 18px;
-  border: none;
+  border: 1px solid rgba(200, 255, 61, 0.3);
   border-radius: 10px;
   background: #2D1B69;
-  color: #ffffff;
+  color: #C8FF3D !important; /* Neon Green matching active tabs */
   font-weight: 700;
   font-size: 14px;
   cursor: pointer;
+  text-decoration: none !important;
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   box-shadow: 0 3px 10px rgba(45, 27, 105, 0.25);
 }
 .btn:hover {
   background: #1e1147;
+  color: #C8FF3D !important;
+  border-color: #C8FF3D;
+  text-decoration: none !important;
   transform: translateY(-1px);
-  box-shadow: 0 5px 14px rgba(45, 27, 105, 0.35);
+  box-shadow: 0 5px 16px rgba(200, 255, 61, 0.25);
 }
 
 :root[data-theme="dark"] .btn {
   background: #C8FF3D;
-  color: #120b29;
+  color: #120b29 !important;
+  border: 1px solid #C8FF3D;
   box-shadow: 0 3px 12px rgba(200, 255, 61, 0.25);
 }
 :root[data-theme="dark"] .btn:hover {
   background: #b3ee28;
+  color: #120b29 !important;
   box-shadow: 0 5px 16px rgba(200, 255, 61, 0.35);
 }
 
@@ -168,27 +175,28 @@ input:focus, select:focus, textarea:focus {
 
 .btn-soft {
   background: var(--soft);
-  color: #2D1B69;
+  color: #2D1B69 !important;
   box-shadow: none;
 }
 .btn-soft:hover {
   background: var(--soft-hover);
-  color: #1e1147;
+  color: #1e1147 !important;
   box-shadow: none;
   transform: none;
 }
 :root[data-theme="dark"] .btn-soft {
   background: var(--soft);
-  color: var(--text);
+  color: var(--text) !important;
 }
 
 .btn-danger {
   background: var(--danger-bg);
-  color: var(--danger);
+  color: var(--danger) !important;
   box-shadow: none;
 }
 .btn-danger:hover {
   background: var(--danger-hover);
+  color: var(--danger) !important;
   box-shadow: none;
   transform: none;
 }
