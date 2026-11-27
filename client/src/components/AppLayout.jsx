@@ -41,7 +41,6 @@ const NAV_SECTIONS = {
       items: [
         { to: "/librarian/books", label: "Inventory Catalog", icon: BookIcon },
         { to: "/librarian/requests", label: "Orders & Payments", icon: RequestIcon },
-        { to: "/librarian/issues", label: "Active Readers", icon: IssueIcon },
       ],
     },
     {
@@ -429,7 +428,6 @@ export default function AppLayout() {
 
                   {/* Dropdown Links */}
                   <div style={{ padding: "6px" }}>
-                    {/* Profile & Info */}
                     <Link
                       to={`/${user?.role}/profile?tab=profile`}
                       onClick={() => setDropdownOpen(false)}
@@ -453,7 +451,6 @@ export default function AppLayout() {
                       Profile & Account
                     </Link>
 
-                    {/* Store Passes (for readers) */}
                     {user?.role === "purchaser" && (
                       <button
                         type="button"
@@ -486,7 +483,6 @@ export default function AppLayout() {
                       </button>
                     )}
 
-                    {/* Settings & Delete Account */}
                     <Link
                       to={`/${user?.role}/profile?tab=settings`}
                       onClick={() => setDropdownOpen(false)}
@@ -511,10 +507,8 @@ export default function AppLayout() {
                     </Link>
                   </div>
 
-                  {/* Divider */}
                   <div style={{ height: "1px", background: "var(--border)", margin: "4px 0" }} />
 
-                  {/* Logout Button */}
                   <div style={{ padding: "6px" }}>
                     <button
                       type="button"

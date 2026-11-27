@@ -4,7 +4,7 @@ import { useToast } from "../context/ToastContext";
 import { formatDate } from "../utils/format";
 import { getEffectiveTier } from "../utils/membershipConfig";
 import Modal from "../components/Modal";
-import { CheckIcon, XIcon, SearchIcon } from "../components/Icons";
+import { SearchIcon } from "../components/Icons";
 
 const TABS = [
   { key: "", label: "All Orders" },
@@ -14,17 +14,19 @@ const TABS = [
 ];
 
 export function getOrderBadge(r) {
+  if (!r) return null;
+
   if (r.status === "returned") {
     return (
       <span
         style={{
           display: "inline-block",
           padding: "3px 10px",
-          borderRadius: "999px",
+          borderRadius: 999,
           fontSize: "0.75rem",
           fontWeight: 700,
           background: "var(--soft)",
-          color: "var(--text-muted)",
+          color: "var(--muted)",
           border: "1px solid var(--border)",
         }}
       >
@@ -33,8 +35,13 @@ export function getOrderBadge(r) {
     );
   }
 
-  // Check if it's a lifetime purchase or rental
-  const isLifetime = r.isPurchased || !r.neededUntil || r.plan === "lifetime";
+  const isLifetime =
+    r.digitalPlan === "lifetime" ||
+    r.plan === "lifetime" ||
+    r.isPurchased ||
+    !r.neededUntil ||
+    r.status === "purchased" ||
+    r.reason?.toLowerCase().includes("lifetime");
 
   if (isLifetime) {
     return (
@@ -42,7 +49,7 @@ export function getOrderBadge(r) {
         style={{
           display: "inline-block",
           padding: "3px 10px",
-          borderRadius: "999px",
+          borderRadius: 999,
           fontSize: "0.75rem",
           fontWeight: 700,
           background: "rgba(16, 185, 129, 0.12)",
@@ -60,7 +67,7 @@ export function getOrderBadge(r) {
       style={{
         display: "inline-block",
         padding: "3px 10px",
-        borderRadius: "999px",
+        borderRadius: 999,
         fontSize: "0.75rem",
         fontWeight: 700,
         background: "rgba(99, 102, 241, 0.12)",
@@ -95,8 +102,9 @@ export default function LibrarianRequests() {
   const fetchRequests = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await api.get("/requests");
-      setRequests(res.data);
+      // ✅ Correct backend endpoint: /purchase-requests
+      const res = await api.get("/purchase-requests");
+      setRequests(Array.isArray(res.data) ? res.data : []);
     } catch {
       toast.error("Failed to load digital book orders");
     } finally {
@@ -115,12 +123,19 @@ export default function LibrarianRequests() {
 
   const filtered = useMemo(() => {
     return requests.filter((r) => {
+      const reader = r.requestedBy || r.user;
+      const isLifetime =
+        r.digitalPlan === "lifetime" ||
+        r.plan === "lifetime" ||
+        r.isPurchased ||
+        !r.neededUntil ||
+        r.status === "purchased" ||
+        r.reason?.toLowerCase().includes("lifetime");
+
       // Tab Filtering
       if (tab === "purchased") {
-        const isLifetime = r.isPurchased || !r.neededUntil || r.plan === "lifetime";
         if (r.status === "returned" || !isLifetime) return false;
       } else if (tab === "rented") {
-        const isLifetime = r.isPurchased || !r.neededUntil || r.plan === "lifetime";
         if (r.status === "returned" || isLifetime) return false;
       } else if (tab === "returned") {
         if (r.status !== "returned") return false;
@@ -129,10 +144,10 @@ export default function LibrarianRequests() {
       // Search Query
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
-        const bookTitle = r.book?.title?.toLowerCase() || "";
-        const bookAuthor = r.book?.author?.toLowerCase() || "";
-        const userName = r.user?.name?.toLowerCase() || "";
-        const userEmail = r.user?.email?.toLowerCase() || "";
+        const bookTitle = (r.title || r.book?.title || "").toLowerCase();
+        const bookAuthor = (r.author || r.book?.author || "").toLowerCase();
+        const userName = (reader?.name || "").toLowerCase();
+        const userEmail = (reader?.email || "").toLowerCase();
 
         if (
           !bookTitle.includes(q) &&
@@ -145,14 +160,13 @@ export default function LibrarianRequests() {
       }
 
       // Date Range Filter
+      const reqDate = new Date(r.createdAt || r.requestDate);
       if (startDate) {
-        const reqDate = new Date(r.requestDate);
         const start = new Date(startDate);
         start.setHours(0, 0, 0, 0);
         if (reqDate < start) return false;
       }
       if (endDate) {
-        const reqDate = new Date(r.requestDate);
         const end = new Date(endDate);
         end.setHours(23, 59, 59, 999);
         if (reqDate > end) return false;
@@ -171,10 +185,10 @@ export default function LibrarianRequests() {
 
   return (
     <div className="page">
-      <div className="page-header">
+      <div className="page-header" style={{ marginBottom: 20 }}>
         <div>
           <h1 className="page-title">Digital Orders & Access Leases</h1>
-          <p className="page-subtitle">
+          <p className="page-subtitle" style={{ color: "var(--muted)", marginTop: 4 }}>
             View reader lifetime purchases, active digital rentals, and returned e-books.
           </p>
         </div>
@@ -217,7 +231,7 @@ export default function LibrarianRequests() {
               left: 12,
               top: "50%",
               transform: "translateY(-50%)",
-              color: "var(--text-muted)",
+              color: "var(--muted)",
             }}
           />
           <input
@@ -231,7 +245,7 @@ export default function LibrarianRequests() {
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: "0.82rem", color: "var(--text-muted)", fontWeight: 600 }}>
+          <span style={{ fontSize: "0.82rem", color: "var(--muted)", fontWeight: 600 }}>
             From:
           </span>
           <input
@@ -244,7 +258,7 @@ export default function LibrarianRequests() {
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: "0.82rem", color: "var(--text-muted)", fontWeight: 600 }}>
+          <span style={{ fontSize: "0.82rem", color: "var(--muted)", fontWeight: 600 }}>
             To:
           </span>
           <input
@@ -295,27 +309,35 @@ export default function LibrarianRequests() {
             </thead>
             <tbody>
               {paginatedRequests.map((r) => {
-                const userTier = getEffectiveTier(r.user);
-                const isLifetime = r.isPurchased || !r.neededUntil || r.plan === "lifetime";
+                const reader = r.requestedBy || r.user;
+                const userTier = getEffectiveTier(reader);
+                const isLifetime =
+                  r.digitalPlan === "lifetime" ||
+                  r.plan === "lifetime" ||
+                  r.isPurchased ||
+                  !r.neededUntil ||
+                  r.status === "purchased" ||
+                  r.reason?.toLowerCase().includes("lifetime");
+
                 const planLabel = isLifetime
                   ? "Lifetime Purchase"
-                  : r.plan
-                  ? `${r.plan.toUpperCase()} Rental`
+                  : r.digitalPlan || r.plan
+                  ? `${(r.digitalPlan || r.plan).toUpperCase()} Rental`
                   : "Rental Access";
 
                 return (
                   <tr key={r._id}>
                     <td>
                       <div style={{ fontWeight: 700, color: "var(--text)" }}>
-                        {r.book?.title || "Unknown Book"}
+                        {r.title || r.book?.title || "Unknown Book"}
                       </div>
-                      <div style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>
-                        {r.book?.author || "Unknown Author"}
+                      <div style={{ fontSize: "0.78rem", color: "var(--muted)" }}>
+                        {r.author || r.book?.author || "Unknown Author"}
                       </div>
                     </td>
                     <td>
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        <span style={{ fontWeight: 600 }}>{r.user?.name || "Reader"}</span>
+                        <span style={{ fontWeight: 600 }}>{reader?.name || "Reader"}</span>
                         <span
                           style={{
                             fontSize: "0.68rem",
@@ -329,8 +351,8 @@ export default function LibrarianRequests() {
                           {userTier.name.toUpperCase()}
                         </span>
                       </div>
-                      <div style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>
-                        {r.user?.email}
+                      <div style={{ fontSize: "0.78rem", color: "var(--muted)" }}>
+                        {reader?.email}
                       </div>
                     </td>
                     <td>
@@ -354,8 +376,8 @@ export default function LibrarianRequests() {
                         formatDate(r.neededUntil)
                       )}
                     </td>
-                    <td style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>
-                      {formatDate(r.requestDate)}
+                    <td style={{ fontSize: "0.85rem", color: "var(--muted)" }}>
+                      {formatDate(r.createdAt || r.requestDate)}
                     </td>
                     <td>{getOrderBadge(r)}</td>
                     <td>
@@ -377,7 +399,7 @@ export default function LibrarianRequests() {
       {/* Pagination Bar */}
       {totalPages > 1 && (
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 20 }}>
-          <div style={{ fontSize: "0.82rem", color: "var(--text-muted)" }}>
+          <div style={{ fontSize: "0.82rem", color: "var(--muted)" }}>
             Showing {(page - 1) * PAGE_SIZE + 1} to {Math.min(page * PAGE_SIZE, filtered.length)} of {filtered.length} orders
           </div>
           <div style={{ display: "flex", gap: 6 }}>
@@ -410,37 +432,39 @@ export default function LibrarianRequests() {
         >
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <div>
-              <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontWeight: 700, textTransform: "uppercase" }}>Book Title</div>
-              <div style={{ fontWeight: 700, fontSize: "1.05rem" }}>{selected.book?.title}</div>
-              <div style={{ color: "var(--text-muted)", fontSize: "0.85rem" }}>by {selected.book?.author}</div>
+              <div style={{ fontSize: "0.75rem", color: "var(--muted)", fontWeight: 700, textTransform: "uppercase" }}>Book Title</div>
+              <div style={{ fontWeight: 700, fontSize: "1.05rem" }}>{selected.title || selected.book?.title}</div>
+              <div style={{ color: "var(--muted)", fontSize: "0.85rem" }}>by {selected.author || selected.book?.author}</div>
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
               <div>
-                <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontWeight: 700, textTransform: "uppercase" }}>Reader</div>
-                <div style={{ fontWeight: 600 }}>{selected.user?.name}</div>
-                <div style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>{selected.user?.email}</div>
+                <div style={{ fontSize: "0.75rem", color: "var(--muted)", fontWeight: 700, textTransform: "uppercase" }}>Reader</div>
+                <div style={{ fontWeight: 600 }}>{(selected.requestedBy || selected.user)?.name}</div>
+                <div style={{ fontSize: "0.8rem", color: "var(--muted)" }}>{(selected.requestedBy || selected.user)?.email}</div>
               </div>
               <div>
-                <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontWeight: 700, textTransform: "uppercase" }}>Access Mode</div>
-                <div style={{ fontWeight: 600 }}>Digital E-Book Access</div>
-                <div style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
-                  {selected.paymentMethod === "razorpay" ? "Razorpay Online" : "Reading Credits"}
+                <div style={{ fontSize: "0.75rem", color: "var(--muted)", fontWeight: 700, textTransform: "uppercase" }}>Payment Mode</div>
+                <div style={{ fontWeight: 600 }}>
+                  {selected.paymentMode === "razorpay" ? "Razorpay Online" : "Reading Credits"}
+                </div>
+                <div style={{ fontSize: "0.8rem", color: "var(--muted)" }}>
+                  {selected.creditCost ? `${selected.creditCost} Credits` : "Online Paid"}
                 </div>
               </div>
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
               <div>
-                <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontWeight: 700, textTransform: "uppercase" }}>Validity / Expiry</div>
+                <div style={{ fontSize: "0.75rem", color: "var(--muted)", fontWeight: 700, textTransform: "uppercase" }}>Validity / Expiry</div>
                 <div style={{ fontWeight: 600 }}>
-                  {selected.isPurchased || !selected.neededUntil
+                  {selected.digitalPlan === "lifetime" || !selected.neededUntil
                     ? "Lifetime Access"
                     : formatDate(selected.neededUntil)}
                 </div>
               </div>
               <div>
-                <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontWeight: 700, textTransform: "uppercase" }}>Status</div>
+                <div style={{ fontSize: "0.75rem", color: "var(--muted)", fontWeight: 700, textTransform: "uppercase" }}>Status</div>
                 <div style={{ marginTop: 4 }}>{getOrderBadge(selected)}</div>
               </div>
             </div>

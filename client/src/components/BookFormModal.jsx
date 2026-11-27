@@ -26,14 +26,13 @@ const empty = {
   category: "",
   price: "",
   creditPrice: "",
-  totalCopies: 1,
+  totalCopies: 9999, // Pure digital store: unlimited copies
 };
 
 export default function BookFormModal({ book, onClose, onSaved }) {
   const toast = useToast();
   const isEdit = Boolean(book);
 
-  // Category choice initial calculation
   const initialCategory = book?.category || "";
   const isPreset = PRESET_CATEGORIES.includes(initialCategory);
 
@@ -54,7 +53,7 @@ export default function BookFormModal({ book, onClose, onSaved }) {
           category: book.category || "",
           price: book.price,
           creditPrice: book.creditPrice || Math.max(1, Math.round((book.price || 100) / 10)),
-          totalCopies: book.totalCopies,
+          totalCopies: book.totalCopies || 9999,
         }
       : empty
   );
@@ -71,7 +70,6 @@ export default function BookFormModal({ book, onClose, onSaved }) {
     setErrors((er) => ({ ...er, [e.target.name]: undefined }));
   };
 
-  // Price change hone par Credit Price automatically suggest karein (price / 10)
   const handlePriceChange = (e) => {
     const val = e.target.value;
     const numPrice = Number(val);
@@ -85,7 +83,6 @@ export default function BookFormModal({ book, onClose, onSaved }) {
     setErrors((er) => ({ ...er, price: undefined }));
   };
 
-  // Category Dropdown Change
   const handleCategoryChoiceChange = (e) => {
     const val = e.target.value;
     setCategoryChoice(val);
@@ -97,84 +94,87 @@ export default function BookFormModal({ book, onClose, onSaved }) {
     setErrors((er) => ({ ...er, category: undefined }));
   };
 
-  // Custom Category Text Input Change
   const handleCustomCategoryInput = (e) => {
     const val = e.target.value;
     setCustomCategory(val);
     setForm((f) => ({ ...f, category: val }));
+    setErrors((er) => ({ ...er, category: undefined }));
   };
 
   const handleFilePicked = (file) => {
     if (!file) return;
-    setRawImageSrc(URL.createObjectURL(file));
-    setShowCropper(true);
+    const reader = new FileReader();
+    reader.onload = () => {
+      setRawImageSrc(reader.result);
+      setShowCropper(true);
+    };
+    reader.readAsDataURL(file);
   };
 
-  const handleCropComplete = (croppedFile) => {
-    setCoverFile(croppedFile);
+  const handleCropComplete = (croppedBlob) => {
     setShowCropper(false);
+    setRawImageSrc(null);
+    if (!croppedBlob) return;
+    const file = new File([croppedBlob], "cover.jpg", { type: "image/jpeg" });
+    setCoverFile(file);
   };
 
   const submit = async (e) => {
     e.preventDefault();
     setFormError("");
+    setErrors({});
 
-    // Schema validation
     const parsed = bookFormSchema.safeParse(form);
     if (!parsed.success) {
-      const fe = {};
-      parsed.error.issues.forEach((i) => {
-        const key = i.path[0];
-        if (!fe[key]) fe[key] = i.message;
-      });
-      setErrors(fe);
+      setErrors(getFieldErrors(parsed.error));
       return;
     }
 
-    const payload = { ...parsed.data };
-    if (!payload.category) delete payload.category;
-
-    // Ensure creditPrice is present
-    if (!payload.creditPrice && form.price) {
-      payload.creditPrice = Math.max(1, Math.round(Number(form.price) / 10));
-    }
-
-    // Single-pass FormData append (Duplicate key bug fixed)
-    const fd = new FormData();
-    Object.entries(payload).forEach(([key, val]) => {
-      if (val !== undefined && val !== null) {
-        fd.append(key, val);
-      }
-    });
-
-    if (coverFile) fd.append("coverImage", coverFile);
-
     setSaving(true);
     try {
+      const data = new FormData();
+      data.append("title", parsed.data.title);
+      data.append("author", parsed.data.author);
+      data.append("isbn", parsed.data.isbn);
+      if (parsed.data.category) data.append("category", parsed.data.category);
+      data.append("price", String(parsed.data.price));
+      if (form.creditPrice) data.append("creditPrice", String(form.creditPrice));
+      data.append("totalCopies", String(parsed.data.totalCopies || 9999));
+      if (coverFile) data.append("coverImage", coverFile);
+
       if (isEdit) {
-        await api.put(`/books/${book._id}`, fd);
-        toast.success("Book updated");
+        await api.put(`/books/${book._id}`, data);
+        toast.success("Book updated successfully");
       } else {
-        await api.post("/books", fd);
-        toast.success("Book added");
+        await api.post("/books", data);
+        toast.success("Book added successfully");
       }
       onSaved();
     } catch (err) {
-      const fe = getFieldErrors(err);
-      if (Object.keys(fe).length) setErrors(fe);
-      else setFormError(getErrorMessage(err));
+      const msg = getErrorMessage(err);
+      if (err.response?.data?.errors) {
+        setErrors(err.response.data.errors);
+      } else {
+        setFormError(msg);
+      }
     } finally {
       setSaving(false);
     }
   };
 
-  const Field = ({ name, label, type = "text", hint, required = false, ...rest }) => (
+  const Field = ({ name, label, type = "text", hint, required }) => (
     <div className="field">
       <label htmlFor={name}>
-        {label}
-        {required && <span style={{ color: "var(--danger, #e53935)", marginLeft: 4 }}>*</span>}
+        {label} {required && <span style={{ color: "var(--danger, #e53935)" }}>*</span>}
       </label>
-      <input id={name} name={name} type={type} value={form[name]} onChange={change} {...rest} />
+      <input
+        id={name}
+        name={name}
+        type={type}
+        value={form[name]}
+        onChange={change}
+        required={required}
+      />
       {hint && !errors[name] && <span className="hint">{hint}</span>}
       {errors[name] && <span className="error-text">{errors[name]}</span>}
     </div>
@@ -182,15 +182,28 @@ export default function BookFormModal({ book, onClose, onSaved }) {
 
   return (
     <>
-      <Modal title={isEdit ? "Edit book" : "Add book"} onClose={onClose}>
-        <form onSubmit={submit} noValidate>
+      <Modal
+        title={isEdit ? "Edit book" : "Add book"}
+        onClose={onClose}
+        footer={
+          <>
+            <button type="button" className="btn btn-soft" onClick={onClose}>
+              Cancel
+            </button>
+            <button type="submit" form="book-form" className="btn" disabled={saving}>
+              {saving ? "Saving..." : isEdit ? "Save changes" : "Add book"}
+            </button>
+          </>
+        }
+      >
+        <form id="book-form" onSubmit={submit} noValidate>
           {formError && <div className="alert-error">{formError}</div>}
 
           {Field({ name: "title", label: "Title", required: true })}
           {Field({ name: "author", label: "Author", required: true })}
           {Field({ name: "isbn", label: "ISBN", hint: "10 or 13 digits, hyphens allowed", required: true })}
 
-          {/* ── CATEGORY DROPDOWN WITH "OTHER" OPTION ── */}
+          {/* Category Dropdown */}
           <div className="field">
             <label htmlFor="categorySelect">Category</label>
             <select
@@ -231,13 +244,13 @@ export default function BookFormModal({ book, onClose, onSaved }) {
             </div>
           )}
 
-          {/* ── PRICE, CREDITS, & TOTAL COPIES ROW ── */}
+          {/* Price & Credits (Pure Digital E-Book) */}
           <div
             className="form-row"
             style={{
               display: "grid",
-              gridTemplateColumns: "1fr 1fr 1fr",
-              gap: 10,
+              gridTemplateColumns: "1fr 1fr",
+              gap: 14,
               alignItems: "start",
             }}
           >
@@ -274,22 +287,6 @@ export default function BookFormModal({ book, onClose, onSaved }) {
               <span className="hint" style={{ fontSize: "0.68rem" }}>₹10 = 1C (editable)</span>
               {errors.creditPrice && <span className="error-text">{errors.creditPrice}</span>}
             </div>
-
-            <div className="field">
-              <label htmlFor="totalCopies">
-                Total copies <span style={{ color: "var(--danger, #e53935)" }}>*</span>
-              </label>
-              <input
-                id="totalCopies"
-                name="totalCopies"
-                type="number"
-                min="1"
-                value={form.totalCopies}
-                onChange={change}
-                required
-              />
-              {errors.totalCopies && <span className="error-text">{errors.totalCopies}</span>}
-            </div>
           </div>
 
           <div className="field">
@@ -307,15 +304,6 @@ export default function BookFormModal({ book, onClose, onSaved }) {
               onFile={handleFilePicked}
               label="Drag and drop book cover"
             />
-          </div>
-
-          <div className="modal-actions">
-            <button type="button" className="btn btn-soft" onClick={onClose}>
-              Cancel
-            </button>
-            <button type="submit" className="btn" disabled={saving}>
-              {saving ? "Saving..." : isEdit ? "Save changes" : "Add book"}
-            </button>
           </div>
         </form>
       </Modal>

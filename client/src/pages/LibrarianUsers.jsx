@@ -1,34 +1,23 @@
 import { useCallback, useEffect, useState, useMemo } from "react";
-import api from "../api/axios";
+import api, { SERVER_URL } from "../api/axios";
 import { useToast } from "../context/ToastContext";
 import { getErrorMessage } from "../utils/errors";
 import { formatDate } from "../utils/format";
-import Modal from "../components/Modal";
 import { SearchIcon } from "../components/Icons";
-
-const SERVER_URL =
-  import.meta.env.VITE_SERVER_URL ||
-  (import.meta.env.VITE_API_URL
-    ? import.meta.env.VITE_API_URL.replace(/\/api\/?$/, "")
-    : "http://localhost:5000");
-
-// ── Member Avatar Helper Component with Auto Fallback ────────────────────────
-const resolveAvatar = (src) => {
-  if (!src) return null;
-  if (src.startsWith("http") || src.startsWith("blob:") || src.startsWith("data:")) return src;
-  return `${SERVER_URL}${src.startsWith("/") ? "" : "/"}${src}`;
-};
 
 function MemberAvatar({ member, size = 34 }) {
   const [broken, setBroken] = useState(false);
-  const avatarSrc = resolveAvatar(member?.avatar);
+  const avatarSrc = member?.avatar
+    ? member.avatar.startsWith("http")
+      ? member.avatar
+      : `${SERVER_URL}${member.avatar}`
+    : null;
 
   if (avatarSrc && !broken) {
     return (
       <img
         src={avatarSrc}
         alt=""
-        referrerPolicy="no-referrer"
         onError={() => setBroken(true)}
         style={{
           width: size,
@@ -54,11 +43,10 @@ function MemberAvatar({ member, size = 34 }) {
         flexShrink: 0,
       }}
     >
-      {member?.name?.[0]?.toUpperCase() || "M"}
+      {member?.name?.[0]?.toUpperCase() || "R"}
     </span>
   );
 }
-// ─────────────────────────────────────────────────────────────────────────────
 
 const TIER_TABS = [
   { key: "", label: "All Plans" },
@@ -83,11 +71,11 @@ export default function LibrarianUsers() {
   const PAGE_SIZE = 8;
   const [page, setPage] = useState(1);
 
-  // Detailed Activity Modal & Accordion State
+  // ── Full Page View State (No Popup Modal!) ──
   const [selectedMember, setSelectedMember] = useState(null);
   const [activityLoading, setActivityLoading] = useState(false);
   const [activityData, setActivityData] = useState(null);
-  const [activeAccordion, setActiveAccordion] = useState("issues");
+  const [activeAccordion, setActiveAccordion] = useState("issues"); // "issues" | "requests"
 
   const loadMembers = useCallback(async () => {
     setLoading(true);
@@ -101,18 +89,17 @@ export default function LibrarianUsers() {
     }
   }, [toast]);
 
-  // Real-time Auto-Sync every 60 seconds without hard refresh
   useEffect(() => {
     loadMembers();
     const interval = setInterval(loadMembers, 60000);
     return () => clearInterval(interval);
   }, [loadMembers]);
 
-  // Reset pagination on filter or sort change
   useEffect(() => {
     setPage(1);
   }, [searchQuery, tierFilter, activityFilter, sortBy]);
 
+  // Click View Activity -> Switch to Full Page View
   const openActivity = async (member) => {
     setSelectedMember(member);
     setActiveAccordion("issues");
@@ -143,9 +130,6 @@ export default function LibrarianUsers() {
       if (activityFilter === "with_books" && m.activeBooksCount <= 0) {
         return false;
       }
-      if (activityFilter === "with_fines" && m.totalFines <= 0) {
-        return false;
-      }
 
       return true;
     });
@@ -162,25 +146,19 @@ export default function LibrarianUsers() {
       if (sortBy === "books") {
         return (b.activeBooksCount || 0) - (a.activeBooksCount || 0);
       }
-      if (sortBy === "fines") {
-        return (b.totalFines || 0) - (a.totalFines || 0);
-      }
       return 0;
     });
   }, [members, searchQuery, tierFilter, activityFilter, sortBy]);
 
-  // Pagination calculation
   const totalPages = Math.ceil(filteredAndSortedMembers.length / PAGE_SIZE) || 1;
   const paginatedMembers = useMemo(() => {
     const start = (page - 1) * PAGE_SIZE;
     return filteredAndSortedMembers.slice(start, start + PAGE_SIZE);
   }, [filteredAndSortedMembers, page]);
 
-  // Aggregate stats for Top Summary Cards
   const totalCount = members.length;
   const paidCount = members.filter((m) => m.membership?.tier && m.membership.tier !== "free").length;
   const borrowingCount = members.filter((m) => (m.activeBooksCount || 0) > 0).length;
-  const finesTotal = members.reduce((sum, m) => sum + (m.totalFines || 0), 0);
 
   const renderTierBadge = (membership) => {
     const tier = membership?.tier || "free";
@@ -223,12 +201,287 @@ export default function LibrarianUsers() {
     );
   };
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // VIEW 2: DEDICATED FULL PAGE ACTIVITY VIEW (When a member is selected)
+  // ═══════════════════════════════════════════════════════════════════════════
+  if (selectedMember) {
+    const member = activityData?.member || selectedMember;
+    const issues = activityData?.issues || [];
+    const requests = activityData?.requests || [];
+
+    return (
+      <div style={{ maxWidth: 960, margin: "0 auto", paddingBottom: 40 }}>
+        {/* Back Button */}
+        <div style={{ marginBottom: 18 }}>
+          <button
+            type="button"
+            className="btn btn-sm btn-secondary"
+            onClick={() => {
+              setSelectedMember(null);
+              setActivityData(null);
+            }}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              fontWeight: 700,
+              padding: "6px 14px",
+            }}
+          >
+            ← Back to Reader Accounts
+          </button>
+        </div>
+
+        {/* Page Head */}
+        <div className="page-head" style={{ marginBottom: 20 }}>
+          <div>
+            <h2>Reader Activity: {member.name}</h2>
+            <p>Inspect active digital book leases, past reading history, and orders.</p>
+          </div>
+        </div>
+
+        {activityLoading ? (
+          <p className="empty">Loading reader history & activity...</p>
+        ) : (
+          <>
+            {/* Top Reader Summary Card (Popup wala Header) */}
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                padding: "16px 20px",
+                background: "var(--card)",
+                borderRadius: 14,
+                border: "1px solid var(--border)",
+                marginBottom: 20,
+                boxShadow: "0 4px 16px rgba(0,0,0,0.03)",
+                flexWrap: "wrap",
+                gap: 16,
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                <MemberAvatar member={member} size={50} />
+                <div>
+                  <div style={{ fontSize: "1.1rem", fontWeight: 800, color: "var(--text)" }}>
+                    {member.name}
+                  </div>
+                  <div style={{ fontSize: "0.82rem", color: "var(--muted)", marginTop: 2 }}>
+                    {member.email} • Joined on {formatDate(member.createdAt)}
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <div
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "6px 14px",
+                    borderRadius: 999,
+                    background: "var(--soft)",
+                    border: "1px solid var(--border)",
+                    fontSize: "0.85rem",
+                    fontWeight: 700,
+                    color: "var(--text)",
+                  }}
+                >
+                  <span>🪙</span>
+                  <span>{member.credits ?? 100} Credits</span>
+                </div>
+
+                <div>{renderTierBadge(member.membership)}</div>
+              </div>
+            </div>
+
+            {/* Accordion 1: Current & Past Issues (Popup wala Accordion) */}
+            <div
+              style={{
+                border: "1px solid var(--border)",
+                borderRadius: 12,
+                marginBottom: 16,
+                overflow: "hidden",
+                background: "var(--card)",
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setActiveAccordion(activeAccordion === "issues" ? "" : "issues")}
+                style={{
+                  width: "100%",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  padding: "14px 18px",
+                  background: activeAccordion === "issues" ? "var(--soft)" : "transparent",
+                  border: "none",
+                  cursor: "pointer",
+                  textAlign: "left",
+                  fontWeight: 700,
+                  fontSize: "0.95rem",
+                  color: "var(--text)",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span>📖</span>
+                  <span>Current & Past Digital Leases ({issues.length})</span>
+                </div>
+                <span style={{ fontSize: "0.9rem", color: "var(--muted)" }}>
+                  {activeAccordion === "issues" ? "▲" : "▼"}
+                </span>
+              </button>
+
+              {activeAccordion === "issues" && (
+                <div style={{ padding: "16px 18px", borderTop: "1px solid var(--border)" }}>
+                  {issues.length === 0 ? (
+                    <p className="empty" style={{ margin: "12px 0" }}>No digital book issues on record.</p>
+                  ) : (
+                    <div className="table-wrap">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Book</th>
+                            <th>Acquired / Due</th>
+                            <th>Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {issues.map((i) => {
+                            const isReturned = i.status === "returned";
+                            const isOverdue = !isReturned && i.dueDate && new Date(i.dueDate) < new Date();
+
+                            return (
+                              <tr key={i._id}>
+                                <td>
+                                  <strong>{i.book?.title || "Unknown Book"}</strong>
+                                  <span className="cell-sub">{i.book?.author}</span>
+                                </td>
+                                <td>
+                                  <div>Acquired: {formatDate(i.issueDate || i.createdAt)}</div>
+                                  <span className="cell-sub">
+                                    Due: {i.dueDate ? formatDate(i.dueDate) : "Lifetime"}
+                                  </span>
+                                </td>
+                                <td>
+                                  <span
+                                    className={`badge ${
+                                      isReturned
+                                        ? "badge-secondary"
+                                        : isOverdue
+                                        ? "badge-danger"
+                                        : "badge-success"
+                                    }`}
+                                  >
+                                    {isReturned ? "Returned" : isOverdue ? "Expired" : "Active"}
+                                  </span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Accordion 2: Purchase & Borrow Requests (Popup wala Accordion) */}
+            <div
+              style={{
+                border: "1px solid var(--border)",
+                borderRadius: 12,
+                overflow: "hidden",
+                background: "var(--card)",
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setActiveAccordion(activeAccordion === "requests" ? "" : "requests")}
+                style={{
+                  width: "100%",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  padding: "14px 18px",
+                  background: activeAccordion === "requests" ? "var(--soft)" : "transparent",
+                  border: "none",
+                  cursor: "pointer",
+                  textAlign: "left",
+                  fontWeight: 700,
+                  fontSize: "0.95rem",
+                  color: "var(--text)",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span>🛒</span>
+                  <span>Purchase & Borrow Requests ({requests.length})</span>
+                </div>
+                <span style={{ fontSize: "0.9rem", color: "var(--muted)" }}>
+                  {activeAccordion === "requests" ? "▲" : "▼"}
+                </span>
+              </button>
+
+              {activeAccordion === "requests" && (
+                <div style={{ padding: "16px 18px", borderTop: "1px solid var(--border)" }}>
+                  {requests.length === 0 ? (
+                    <p className="empty" style={{ margin: "12px 0" }}>No request records found for this reader.</p>
+                  ) : (
+                    <div className="table-wrap">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Book</th>
+                            <th>Requested On</th>
+                            <th>Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {requests.map((r) => (
+                            <tr key={r._id}>
+                              <td>
+                                <strong>{r.title || r.book?.title}</strong>
+                                <span className="cell-sub">{r.author || r.book?.author}</span>
+                              </td>
+                              <td>{formatDate(r.createdAt || r.requestDate)}</td>
+                              <td>
+                                <span
+                                  className={`badge ${
+                                    r.status === "approved"
+                                      ? "badge-success"
+                                      : r.status === "rejected"
+                                      ? "badge-danger"
+                                      : "badge-warning"
+                                  }`}
+                                >
+                                  {r.status?.toUpperCase()}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // VIEW 1: MAIN READERS TABLE VIEW
+  // ═══════════════════════════════════════════════════════════════════════════
   return (
     <>
       <div className="page-head">
         <div>
-          <h2>Member Records</h2>
-          <p>Inspect registered library members, active subscriptions, and borrowing activity.</p>
+          <h2>Reader Accounts</h2>
+          <p>Inspect registered readers, reading subscriptions, and digital access activity.</p>
         </div>
       </div>
 
@@ -242,7 +495,7 @@ export default function LibrarianUsers() {
         }}
       >
         <div className="card" style={{ padding: "14px 16px" }}>
-          <span style={{ fontSize: "0.8rem", color: "var(--text-secondary, #666)" }}>Total Members</span>
+          <span style={{ fontSize: "0.8rem", color: "var(--muted)" }}>Total Readers</span>
           <div style={{ fontSize: "1.6rem", fontWeight: "bold", marginTop: 4 }}>{totalCount}</div>
         </div>
 
@@ -254,25 +507,9 @@ export default function LibrarianUsers() {
         </div>
 
         <div className="card" style={{ padding: "14px 16px" }}>
-          <span style={{ fontSize: "0.8rem", color: "#16a34a" }}>Currently Borrowing</span>
+          <span style={{ fontSize: "0.8rem", color: "#16a34a" }}>Readers With Active Books</span>
           <div style={{ fontSize: "1.6rem", fontWeight: "bold", color: "#16a34a", marginTop: 4 }}>
             {borrowingCount}
-          </div>
-        </div>
-
-        <div className="card" style={{ padding: "14px 16px" }}>
-          <span style={{ fontSize: "0.8rem", color: finesTotal > 0 ? "#dc2626" : "var(--text-secondary, #666)" }}>
-            Total Unpaid Fines
-          </span>
-          <div
-            style={{
-              fontSize: "1.6rem",
-              fontWeight: "bold",
-              color: finesTotal > 0 ? "#dc2626" : "var(--text, #333)",
-              marginTop: 4,
-            }}
-          >
-            ₹{finesTotal}
           </div>
         </div>
       </div>
@@ -308,7 +545,7 @@ export default function LibrarianUsers() {
               left: 10,
               top: "50%",
               transform: "translateY(-50%)",
-              color: "var(--text-secondary, #9ca3af)",
+              color: "var(--muted)",
               display: "flex",
               alignItems: "center",
               pointerEvents: "none",
@@ -319,7 +556,7 @@ export default function LibrarianUsers() {
           <input
             type="text"
             className="toolbar-input"
-            placeholder="Search member by name or email..."
+            placeholder="Search reader by name or email..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             style={{ paddingLeft: 32, width: "100%" }}
@@ -332,9 +569,8 @@ export default function LibrarianUsers() {
           onChange={(e) => setActivityFilter(e.target.value)}
           style={{ width: "auto" }}
         >
-          <option value="">All Members</option>
+          <option value="">All Readers</option>
           <option value="with_books">With Active Books</option>
-          <option value="with_fines">With Unpaid Fines</option>
         </select>
 
         <select
@@ -342,32 +578,28 @@ export default function LibrarianUsers() {
           value={sortBy}
           onChange={(e) => setSortBy(e.target.value)}
           style={{ width: "auto", fontWeight: 600 }}
-          title="Change sorting order"
         >
-          <option value="recent_activity">Sort: Recent Book Order / Activity</option>
+          <option value="recent_activity">Sort: Recent Activity</option>
           <option value="joined">Sort: Recently Joined</option>
           <option value="books">Sort: Most Active Books</option>
-          <option value="fines">Sort: Highest Fines</option>
         </select>
       </div>
 
       {/* Members Table */}
       {loading ? (
-        <p className="empty">Loading members...</p>
+        <p className="empty">Loading readers...</p>
       ) : filteredAndSortedMembers.length === 0 ? (
-        <p className="empty">No members matching your filters.</p>
+        <p className="empty">No readers matching your filters.</p>
       ) : (
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Member</th>
+                <th>Reader</th>
                 <th>Membership Tier</th>
-                <th>Issued Books</th>
-                <th>Pending Requests</th>
-                <th>Fines Due</th>
+                <th>Active Books</th>
                 <th>Recent Activity</th>
-                <th>Actions</th>
+                <th>Action</th>
               </tr>
             </thead>
             <tbody>
@@ -387,7 +619,7 @@ export default function LibrarianUsers() {
                     <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
                       <div>{renderTierBadge(m.membership)}</div>
                       {m.membership?.expiresAt && m.membership.tier !== "free" && (
-                        <span style={{ fontSize: "0.72rem", color: "var(--text-secondary, #666)" }}>
+                        <span style={{ fontSize: "0.72rem", color: "var(--muted)" }}>
                           Exp: {formatDate(m.membership.expiresAt)}
                         </span>
                       )}
@@ -404,26 +636,11 @@ export default function LibrarianUsers() {
                   </td>
 
                   <td>
-                    <span
-                      className={`badge ${m.pendingRequestsCount > 0 ? "badge-warning" : "badge-secondary"}`}
-                      style={{ fontSize: "0.78rem" }}
-                    >
-                      {m.pendingRequestsCount} pending
-                    </span>
-                  </td>
-
-                  <td>
-                    <strong style={{ color: m.totalFines > 0 ? "#dc2626" : "#16a34a" }}>
-                      ₹{m.totalFines}
-                    </strong>
-                  </td>
-
-                  <td>
                     <div>
                       <strong>{formatDate(m.lastActivityAt || m.createdAt)}</strong>
                       <span
                         className="cell-sub"
-                        style={{ fontSize: "0.72rem", color: "var(--text-secondary, #6b7280)", marginTop: 2 }}
+                        style={{ fontSize: "0.72rem", color: "var(--muted)", marginTop: 2 }}
                       >
                         Joined: {formatDate(m.createdAt)}
                       </span>
@@ -431,12 +648,14 @@ export default function LibrarianUsers() {
                   </td>
 
                   <td>
+                    {/* View Activity: Opens full page view */}
                     <button
+                      type="button"
                       className="btn btn-soft btn-sm"
                       onClick={() => openActivity(m)}
                       style={{ whiteSpace: "nowrap" }}
                     >
-                      View Activity
+                      View Activity →
                     </button>
                   </td>
                 </tr>
@@ -451,20 +670,12 @@ export default function LibrarianUsers() {
         <div className="pagination" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 18 }}>
           <button
             className="btn btn-soft btn-sm"
-            onClick={() => setPage(1)}
-            disabled={page <= 1}
-            title="First Page"
-          >
-            « First
-          </button>
-          <button
-            className="btn btn-soft btn-sm"
             onClick={() => setPage((p) => Math.max(1, p - 1))}
             disabled={page <= 1}
           >
             ‹ Prev
           </button>
-          <span style={{ fontSize: "0.85rem", color: "var(--text-secondary, #666)", margin: "0 8px" }}>
+          <span style={{ fontSize: "0.85rem", color: "var(--muted)", margin: "0 8px" }}>
             Page {page} of {totalPages}
           </span>
           <button
@@ -474,251 +685,7 @@ export default function LibrarianUsers() {
           >
             Next ›
           </button>
-          <button
-            className="btn btn-soft btn-sm"
-            onClick={() => setPage(totalPages)}
-            disabled={page >= totalPages}
-            title="Last Page"
-          >
-            Last »
-          </button>
         </div>
-      )}
-
-      {/* Detailed Member Activity Modal with Accordion & Fine Badges */}
-      {selectedMember && (
-        <Modal
-          title={`Member Activity: ${selectedMember.name}`}
-          onClose={() => {
-            setSelectedMember(null);
-            setActivityData(null);
-          }}
-          maxWidth="680px"
-        >
-          {activityLoading ? (
-            <p className="empty">Loading member history...</p>
-          ) : !activityData ? (
-            <p className="empty">No activity data found.</p>
-          ) : (
-            <div>
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  padding: "12px 14px",
-                  background: "var(--card-bg, #f9fafb)",
-                  borderRadius: 10,
-                  border: "1px solid var(--border, #e5e7eb)",
-                  marginBottom: 16,
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                  <MemberAvatar member={activityData.member} size={42} />
-                  <div>
-                    <div style={{ fontSize: "1rem", fontWeight: 700 }}>{activityData.member?.name}</div>
-                    <div style={{ fontSize: "0.8rem", color: "var(--text-secondary, #666)" }}>
-                      {activityData.member?.email}
-                    </div>
-                  </div>
-                </div>
-                <div>{renderTierBadge(activityData.member?.membership)}</div>
-              </div>
-
-              {/* Accordion 1: Current & Past Issues (Default: OPEN) */}
-              <div
-                style={{
-                  border: "1px solid var(--border, #e5e7eb)",
-                  borderRadius: 10,
-                  marginBottom: 12,
-                  overflow: "hidden",
-                  background: "var(--surface, #ffffff)",
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={() => setActiveAccordion(activeAccordion === "issues" ? "" : "issues")}
-                  style={{
-                    width: "100%",
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    padding: "12px 14px",
-                    background: activeAccordion === "issues" ? "var(--soft, rgba(92,107,192,0.06))" : "transparent",
-                    border: "none",
-                    cursor: "pointer",
-                    textAlign: "left",
-                    transition: "background 0.15s ease",
-                  }}
-                >
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <strong style={{ fontSize: "0.95rem", color: "var(--text, #111)" }}>
-                      Current & Past Issues
-                    </strong>
-                    <span className="badge" style={{ fontSize: "0.75rem", padding: "2px 8px" }}>
-                      {activityData.issues?.length || 0}
-                    </span>
-                  </div>
-                  <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    style={{
-                      transform: activeAccordion === "issues" ? "rotate(180deg)" : "rotate(0deg)",
-                      transition: "transform 0.2s ease",
-                      color: "var(--text-secondary, #666)",
-                    }}
-                  >
-                    <polyline points="6 9 12 15 18 9" />
-                  </svg>
-                </button>
-
-                {activeAccordion === "issues" && (
-                  <div style={{ padding: "12px 14px", borderTop: "1px solid var(--border, #e5e7eb)" }}>
-                    {(!activityData.issues || activityData.issues.length === 0) ? (
-                      <p style={{ margin: 0, fontSize: "0.85rem", color: "var(--text-secondary, #888)" }}>
-                        No books issued to this member yet.
-                      </p>
-                    ) : (
-                      <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 230, overflowY: "auto" }}>
-                        {activityData.issues.map((i) => (
-                          <div
-                            key={i._id}
-                            style={{
-                              display: "flex",
-                              justifyContent: "space-between",
-                              alignItems: "center",
-                              padding: "8px 12px",
-                              border: "1px solid var(--border, #e5e7eb)",
-                              borderRadius: 8,
-                              fontSize: "0.85rem",
-                            }}
-                          >
-                            <div>
-                              <strong>{i.book?.title}</strong>
-                              <div style={{ fontSize: "0.75rem", color: "var(--text-secondary, #666)" }}>
-                                Issued: {formatDate(i.issueDate)} | Due: {formatDate(i.dueDate)}
-                              </div>
-                            </div>
-                            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                              {i.finePaid ? (
-                                <span className="badge badge-success" style={{ fontSize: "0.72rem" }}>
-                                  Fine Paid (₹{i.rawFine || i.fine})
-                                </span>
-                              ) : (i.currentFine || i.fine) > 0 ? (
-                                <span className="badge badge-danger" style={{ fontSize: "0.72rem" }}>
-                                  Fine Due: ₹{i.currentFine || i.fine}
-                                </span>
-                              ) : null}
-                              <span className={`badge ${i.status === "issued" ? "badge-warning" : "badge-success"}`}>
-                                {i.status}
-                              </span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* Accordion 2: Purchase & Borrow Requests (Default: CLOSED) */}
-              <div
-                style={{
-                  border: "1px solid var(--border, #e5e7eb)",
-                  borderRadius: 10,
-                  overflow: "hidden",
-                  background: "var(--surface, #ffffff)",
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={() => setActiveAccordion(activeAccordion === "requests" ? "" : "requests")}
-                  style={{
-                    width: "100%",
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    padding: "12px 14px",
-                    background: activeAccordion === "requests" ? "var(--soft, rgba(92,107,192,0.06))" : "transparent",
-                    border: "none",
-                    cursor: "pointer",
-                    textAlign: "left",
-                    transition: "background 0.15s ease",
-                  }}
-                >
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <strong style={{ fontSize: "0.95rem", color: "var(--text, #111)" }}>
-                      Purchase & Borrow Requests
-                    </strong>
-                    <span className="badge" style={{ fontSize: "0.75rem", padding: "2px 8px" }}>
-                      {activityData.requests?.length || 0}
-                    </span>
-                  </div>
-                  <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    style={{
-                      transform: activeAccordion === "requests" ? "rotate(180deg)" : "rotate(0deg)",
-                      transition: "transform 0.2s ease",
-                      color: "var(--text-secondary, #666)",
-                    }}
-                  >
-                    <polyline points="6 9 12 15 18 9" />
-                  </svg>
-                </button>
-
-                {activeAccordion === "requests" && (
-                  <div style={{ padding: "12px 14px", borderTop: "1px solid var(--border, #e5e7eb)" }}>
-                    {(!activityData.requests || activityData.requests.length === 0) ? (
-                      <p style={{ margin: 0, fontSize: "0.85rem", color: "var(--text-secondary, #888)" }}>
-                        No purchase or borrow requests submitted by this member.
-                      </p>
-                    ) : (
-                      <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 230, overflowY: "auto" }}>
-                        {activityData.requests.map((r) => (
-                          <div
-                            key={r._id}
-                            style={{
-                              display: "flex",
-                              justifyContent: "space-between",
-                              alignItems: "center",
-                              padding: "8px 12px",
-                              border: "1px solid var(--border, #e5e7eb)",
-                              borderRadius: 8,
-                              fontSize: "0.85rem",
-                            }}
-                          >
-                            <div>
-                              <strong>{r.title}</strong>
-                              <div style={{ fontSize: "0.75rem", color: "var(--text-secondary, #666)" }}>
-                                Requested: {formatDate(r.createdAt)}
-                              </div>
-                            </div>
-                            <span className={`badge badge-${r.status}`}>
-                              {r.status}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-        </Modal>
       )}
     </>
   );
